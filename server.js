@@ -51,6 +51,10 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "25mb" }));
 
+app.get("/api/health", (req, res) => {
+  res.json({ status: "ok" });
+});
+
 app.post("/api/upload-document", async (req, res) => {
   try {
     const { filename, mimeType, base64Content } = req.body;
@@ -79,22 +83,26 @@ app.post("/api/upload-document", async (req, res) => {
 
 app.post("/api/run-skill", async (req, res) => {
   try {
-    const { skillId, sourceFile, matter, section, caseNotes, uploadedDocuments } = req.body;
+    const { skillId, sourceFile, matter, section, uploadedDocuments, message } = req.body;
 
-    if (!skillId || !sourceFile) {
-      return res.status(400).json({ error: "skillId and sourceFile are required." });
+    let skillInstructions = null;
+    if (skillId || sourceFile) {
+      if (!skillId || !sourceFile) {
+        return res.status(400).json({ error: "skillId and sourceFile must both be provided if either is." });
+      }
+
+      const skillPath = path.join(SKILLS_DIR, sourceFile);
+      if (!skillPath.startsWith(SKILLS_DIR)) {
+        return res.status(400).json({ error: "Invalid sourceFile." });
+      }
+      if (!fs.existsSync(skillPath)) {
+        return res.status(404).json({ error: `Skill file not found: ${sourceFile}` });
+      }
+
+      skillInstructions = fs.readFileSync(skillPath, "utf8");
     }
 
-    const skillPath = path.join(SKILLS_DIR, sourceFile);
-    if (!skillPath.startsWith(SKILLS_DIR)) {
-      return res.status(400).json({ error: "Invalid sourceFile." });
-    }
-    if (!fs.existsSync(skillPath)) {
-      return res.status(404).json({ error: `Skill file not found: ${sourceFile}` });
-    }
-
-    const skillInstructions = fs.readFileSync(skillPath, "utf8");
-    const prompt = buildPrompt({ skillInstructions, matter, section, caseNotes, uploadedDocuments });
+    const prompt = buildPrompt({ skillInstructions, matter, section, uploadedDocuments, message });
 
     const content = [{ type: "text", text: prompt }];
     const fileAttachments = (uploadedDocuments || []).filter((d) => d.fileId);
@@ -119,10 +127,18 @@ app.post("/api/run-skill", async (req, res) => {
   }
 });
 
-function buildPrompt({ skillInstructions, matter, section, caseNotes, uploadedDocuments }) {
+function buildPrompt({ skillInstructions, matter, section, uploadedDocuments, message }) {
   const parts = [];
 
-  parts.push(`# Skill Instructions\n\n${skillInstructions}`);
+  if (skillInstructions) {
+    parts.push(`# Skill Instructions\n\n${skillInstructions}`);
+  } else {
+    parts.push(
+      `# Skill Instructions\n\nNo Skill selected -- there is no specific drafting workflow to ` +
+        `follow. Respond directly to the Lawyer's Message below, using the Matter Context, Current ` +
+        `Document Section, and any Uploaded Documents provided.`
+    );
+  }
 
   if (matter) {
     parts.push(
@@ -148,12 +164,6 @@ function buildPrompt({ skillInstructions, matter, section, caseNotes, uploadedDo
     parts.push(`# Current Document Section\n\nNo section detected at the cursor.`);
   }
 
-  parts.push(
-    caseNotes
-      ? `# Case Brief / Legal Theory Notes (lawyer-supplied)\n\n${caseNotes}`
-      : `# Case Brief / Legal Theory Notes\n\nNone provided.`
-  );
-
   if (uploadedDocuments && uploadedDocuments.length > 0) {
     const list = uploadedDocuments
       .map((d) =>
@@ -167,9 +177,15 @@ function buildPrompt({ skillInstructions, matter, section, caseNotes, uploadedDo
     parts.push(`# Uploaded Documents\n\nNone uploaded for this matter.`);
   }
 
+  if (message) {
+    parts.push(`# Lawyer's Message\n\n${message}`);
+  }
+
   parts.push(
     `# Task\n\nFollow the Skill Instructions above. Use the Matter Context, Current Document ` +
-      `Section, Case Brief notes, and any attached Uploaded Documents actually provided. Where the ` +
+      `Section, and any attached Uploaded Documents actually provided. ${
+        message ? "Also follow the Lawyer's Message above -- it takes priority where it conflicts with default Skill behaviour. " : ""
+      }Where the ` +
       `Skill instructions call for a source document, fact table entry, or piece of evidence not ` +
       `actually supplied above (including any document listed as not attached), say so explicitly ` +
       `rather than inventing it. Produce the clean draft output the Skill instructions describe.`

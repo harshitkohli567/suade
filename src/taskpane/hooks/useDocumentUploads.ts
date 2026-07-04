@@ -7,6 +7,11 @@ import { UploadedDocumentRecord, DocumentRole } from "@/types";
  * (client.beta.files.upload) and returns a real file_id. claudeFileReference
  * now holds that real ID, not a mock placeholder.
  *
+ * Uploads a batch concurrently (bounded by CONCURRENCY_LIMIT) rather than
+ * one at a time, so selecting a large volume of documents (e.g. a full
+ * discovery bundle) doesn't serialize into one file at a time -- but also
+ * doesn't fire hundreds of simultaneous HTTPS requests at the local backend.
+ *
  * UNTESTED end-to-end for DOCX specifically -- see server.js's header
  * comment. If a DOCX upload succeeds here but a Skill run can't actually
  * read its content, that's the DOCX-via-Files-API uncertainty flagged
@@ -14,6 +19,7 @@ import { UploadedDocumentRecord, DocumentRole } from "@/types";
  */
 
 const BACKEND_URL = "https://localhost:3001";
+const CONCURRENCY_LIMIT = 3;
 
 export const DOCUMENT_ROLES: DocumentRole[] = [
   "governing_contract",
@@ -23,6 +29,15 @@ export const DOCUMENT_ROLES: DocumentRole[] = [
   "corporate_registry",
   "other",
 ];
+
+export type UploadJobStatus = "queued" | "uploading" | "done" | "error";
+
+export interface UploadJob {
+  id: string;
+  filename: string;
+  status: UploadJobStatus;
+  error?: string;
+}
 
 function inferFileType(filename: string): "pdf" | "docx" {
   return filename.toLowerCase().endsWith(".docx") ? "docx" : "pdf";
@@ -48,15 +63,35 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
+async function runWithConcurrencyLimit<T>(
+  items: T[],
+  limit: number,
+  worker: (item: T) => Promise<void>
+): Promise<void> {
+  let nextIndex = 0;
+
+  async function runNext(): Promise<void> {
+    const current = nextIndex++;
+    if (current >= items.length) return;
+    await worker(items[current]);
+    return runNext();
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => runNext()));
+}
+
 export function useDocumentUploads() {
   const [documents, setDocuments] = useState<UploadedDocumentRecord[]>([]);
+  const [uploadJobs, setUploadJobs] = useState<UploadJob[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
-  const uploadDocument = async (file: File, matterId: string, documentRole: DocumentRole) => {
-    setUploading(true);
-    setUploadError(null);
+  const updateJob = (jobId: string, patch: Partial<UploadJob>) => {
+    setUploadJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, ...patch } : j)));
+  };
 
+  const uploadOne = async (file: File, matterId: string, documentRole: DocumentRole, jobId: string) => {
+    updateJob(jobId, { status: "uploading" });
     try {
       const base64Content = await fileToBase64(file);
       const response = await fetch(`${BACKEND_URL}/api/upload-document`, {
@@ -91,11 +126,34 @@ export function useDocumentUploads() {
         linkedSkillRunIds: [],
       };
       setDocuments((prev) => [...prev, record]);
+      updateJob(jobId, { status: "done" });
     } catch (err) {
-      setUploadError(err instanceof Error ? err.message : "Unknown error uploading document.");
-    } finally {
-      setUploading(false);
+      updateJob(jobId, {
+        status: "error",
+        error: err instanceof Error ? err.message : "Unknown error uploading document.",
+      });
     }
+  };
+
+  const uploadDocuments = async (files: File[], matterId: string, documentRole: DocumentRole) => {
+    if (files.length === 0) return;
+
+    setUploadError(null);
+    setUploading(true);
+
+    const jobs: UploadJob[] = files.map((file) => ({
+      id: `job-${crypto.randomUUID()}`,
+      filename: file.name,
+      status: "queued",
+    }));
+    setUploadJobs(jobs);
+
+    const work = files.map((file, i) => ({ file, jobId: jobs[i].id }));
+    await runWithConcurrencyLimit(work, CONCURRENCY_LIMIT, ({ file, jobId }) =>
+      uploadOne(file, matterId, documentRole, jobId)
+    );
+
+    setUploading(false);
   };
 
   const removeDocument = (documentId: string) => {
@@ -105,5 +163,12 @@ export function useDocumentUploads() {
   const documentsForMatter = (matterId: string): UploadedDocumentRecord[] =>
     documents.filter((d) => d.matterId === matterId);
 
-  return { uploadDocument, removeDocument, documentsForMatter, uploading, uploadError };
+  return {
+    uploadDocuments,
+    removeDocument,
+    documentsForMatter,
+    uploading,
+    uploadError,
+    uploadJobs,
+  };
 }

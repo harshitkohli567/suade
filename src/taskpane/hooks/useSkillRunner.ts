@@ -5,11 +5,11 @@ import { readSectionText } from "../office/documentText";
 const BACKEND_URL = "https://localhost:3001";
 
 interface RunArgs {
-  skill: SkillRecord;
+  skill: SkillRecord | null;
   matter: MatterRecord | null;
   activeSection: DocumentSection | null;
-  caseNotes: string;
   uploadedDocuments: UploadedDocumentRecord[];
+  message: string;
 }
 
 export function useSkillRunner() {
@@ -29,17 +29,18 @@ export function useSkillRunner() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          skillId: args.skill.skillId,
-          sourceFile: args.skill.sourceFile,
+          skillId: args.skill ? args.skill.skillId : null,
+          sourceFile: args.skill ? args.skill.sourceFile : null,
           matter: args.matter,
           section: args.activeSection
             ? { sectionId: args.activeSection.sectionId, title: args.activeSection.title, text: sectionText }
             : null,
-          caseNotes: args.caseNotes,
           uploadedDocuments: args.uploadedDocuments.map((d) => ({
             filename: d.filename,
             documentRole: d.documentRole,
-            fileId: d.claudeFileReference,          })),
+            fileId: d.claudeFileReference,
+          })),
+          message: args.message,
         }),
       });
 

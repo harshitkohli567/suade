@@ -1,23 +1,33 @@
 import React, { useState, useEffect } from "react";
-import { MatterRecord, DocumentSection, UploadedDocumentRecord } from "@/types";
+import { MatterRecord, DocumentSection, DocumentRole, UploadedDocumentRecord } from "@/types";
 import { SKILL_REGISTRY } from "@/data/skills/registry";
 import { useSkillRunner } from "./hooks/useSkillRunner";
+import { DOCUMENT_ROLES, UploadJob } from "./hooks/useDocumentUploads";
 import { insertTextAtSectionEnd } from "./office/insertContent";
+import UploadProgress from "./UploadProgress";
 
 interface SkillRunnerSectionProps {
   matter: MatterRecord | null;
   activeSection: DocumentSection | null;
-  caseNotes: string;
   uploadedDocuments: UploadedDocumentRecord[];
+  uploadDocuments: (files: File[], matterId: string, documentRole: DocumentRole) => Promise<void>;
+  uploading: boolean;
+  uploadError: string | null;
+  uploadJobs: UploadJob[];
 }
 
 const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
   matter,
   activeSection,
-  caseNotes,
   uploadedDocuments,
+  uploadDocuments,
+  uploading,
+  uploadError,
+  uploadJobs,
 }) => {
-  const [selectedSkillId, setSelectedSkillId] = useState(SKILL_REGISTRY[0].skillId);
+  const [selectedSkillId, setSelectedSkillId] = useState("");
+  const [uploadRole, setUploadRole] = useState<DocumentRole>("exhibit");
+  const [message, setMessage] = useState("");
   const { run, output, loading, error } = useSkillRunner();
 
   const [editedOutput, setEditedOutput] = useState("");
@@ -32,10 +42,19 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
     }
   }, [output]);
 
-  const selectedSkill = SKILL_REGISTRY.find((s) => s.skillId === selectedSkillId) ?? SKILL_REGISTRY[0];
+  const selectedSkill = SKILL_REGISTRY.find((s) => s.skillId === selectedSkillId) ?? null;
 
   const handleRun = () => {
-    run({ skill: selectedSkill, matter, activeSection, caseNotes, uploadedDocuments });
+    run({ skill: selectedSkill, matter, activeSection, uploadedDocuments, message });
+  };
+
+  const handleUploadFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!matter || !e.target.files || e.target.files.length === 0) {
+      return;
+    }
+    const files = Array.from(e.target.files);
+    e.target.value = "";
+    await uploadDocuments(files, matter.matterId, uploadRole);
   };
 
   const handleInsert = async () => {
@@ -75,6 +94,7 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
         value={selectedSkillId}
         onChange={(e) => setSelectedSkillId(e.target.value)}
       >
+        <option value="">-- No Skill (send message only) --</option>
         {SKILL_REGISTRY.map((skill) => (
           <option key={skill.skillId} value={skill.skillId}>
             {skill.displayName}
@@ -82,10 +102,73 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
         ))}
       </select>
 
-      <p style={styles.helperText}>{selectedSkill.description}</p>
+      {selectedSkill && <p style={styles.helperText}>{selectedSkill.description}</p>}
+
+      <p style={styles.fieldLabel}>Upload Documents for This Run</p>
+      <p style={styles.helperText}>
+        Select any number of PDFs/DOCX relevant to this Skill (e.g. a full exhibit bundle) --
+        uploads a large batch concurrently rather than one at a time. They're added to the
+        matter's document set and included in every Skill run for {matter ? matter.matterId : "this matter"} from
+        now on, not just this one.
+      </p>
+
+      {!matter && (
+        <p style={styles.helperText}>
+          <em>Detect a matter above first -- uploads are scoped to a resolved matter.</em>
+        </p>
+      )}
+
+      {matter && (
+        <div style={styles.uploadRow}>
+          <select
+            style={styles.uploadRoleSelect}
+            value={uploadRole}
+            onChange={(e) => setUploadRole(e.target.value as DocumentRole)}
+            disabled={uploading}
+          >
+            {DOCUMENT_ROLES.map((role) => (
+              <option key={role} value={role}>
+                {role}
+              </option>
+            ))}
+          </select>
+          <input
+            type="file"
+            accept=".pdf,.docx"
+            multiple
+            onChange={handleUploadFiles}
+            style={styles.fileInput}
+            disabled={uploading}
+          />
+        </div>
+      )}
+
+      <UploadProgress jobs={uploadJobs} />
+
+      {uploadError && (
+        <div style={styles.errorBox}>
+          <strong>Upload error:</strong> {uploadError}
+        </div>
+      )}
+
+      {uploadedDocuments.length > 0 && (
+        <p style={styles.helperText}>
+          {uploadedDocuments.length} document{uploadedDocuments.length === 1 ? "" : "s"} attached for
+          this matter.
+        </p>
+      )}
+
+      <p style={styles.fieldLabel}>Message to Claude</p>
+      <textarea
+        style={styles.messageTextarea}
+        value={message}
+        onChange={(e) => setMessage(e.target.value)}
+        placeholder="e.g. Emphasise the passing-of-risk date and cross-reference Clause 11.2 directly."
+        rows={4}
+      />
 
       <button style={styles.runButton} onClick={handleRun} disabled={loading}>
-        {loading ? "Running…" : "Run Skill"}
+        {loading ? "Running…" : "Enter"}
       </button>
 
       {error && (
@@ -148,7 +231,21 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
 const styles: Record<string, React.CSSProperties> = {
   fieldLabel: { fontWeight: 700, color: "#5B6470", marginTop: "12px", fontSize: "13px" },
   helperText: { fontSize: "11px", color: "#5B6470", margin: "4px 0 8px 0", lineHeight: 1.5 },
+  uploadRow: { display: "flex", gap: "8px", alignItems: "center", marginBottom: "6px" },
+  uploadRoleSelect: { fontSize: "12px", padding: "4px" },
+  fileInput: { fontSize: "12px" },
   select: { fontSize: "12px", padding: "4px", width: "100%", marginBottom: "6px" },
+  messageTextarea: {
+    width: "100%",
+    fontSize: "12px",
+    fontFamily: "Segoe UI, sans-serif",
+    padding: "8px",
+    border: "1px solid #DDE3EA",
+    borderRadius: "4px",
+    boxSizing: "border-box",
+    resize: "vertical",
+    marginBottom: "8px",
+  },
   runButton: {
     fontSize: "12px",
     padding: "8px 12px",
