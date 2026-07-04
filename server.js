@@ -46,6 +46,8 @@ const SKILLS_DIR = path.join(__dirname, "src", "data", "skills", "source");
 const MODEL = "claude-sonnet-5";
 const MAX_TOKENS = 16000;
 const FILES_API_BETA = "files-api-2025-04-14";
+const FEEDBACK_LOG_PATH = path.join(__dirname, "skill-feedback.log");
+const PLACEHOLDER_LAWYER_ID = "current lawyer (placeholder -- no auth built yet)";
 
 const app = express();
 app.use(cors());
@@ -124,6 +126,37 @@ app.post("/api/run-skill", async (req, res) => {
   } catch (err) {
     console.error("Suade backend error:", err);
     res.status(500).json({ error: err.message || "Unknown server error." });
+  }
+});
+
+app.post("/api/skill-feedback", (req, res) => {
+  try {
+    const { vote, skillId, skillName, matterId, sectionId, documentIds } = req.body;
+
+    if (vote !== "up" && vote !== "down") {
+      return res.status(400).json({ error: 'vote must be "up" or "down".' });
+    }
+    if (!skillId) {
+      return res.status(400).json({ error: "skillId is required." });
+    }
+
+    const entry = {
+      feedbackId: `fb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      vote,
+      skillId,
+      skillName: skillName || null,
+      matterId: matterId || null,
+      sectionId: sectionId || null,
+      documentIds: Array.isArray(documentIds) ? documentIds : [],
+      lawyerId: PLACEHOLDER_LAWYER_ID,
+      createdAt: new Date().toISOString(),
+    };
+
+    fs.appendFileSync(FEEDBACK_LOG_PATH, `${JSON.stringify(entry)}\n`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Suade backend feedback error:", err);
+    res.status(500).json({ error: err.message || "Unknown error logging feedback." });
   }
 });
 

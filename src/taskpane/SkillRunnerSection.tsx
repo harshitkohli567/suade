@@ -2,9 +2,18 @@ import React, { useState, useEffect } from "react";
 import { MatterRecord, DocumentSection, DocumentRole, UploadedDocumentRecord } from "@/types";
 import { SKILL_REGISTRY } from "@/data/skills/registry";
 import { useSkillRunner } from "./hooks/useSkillRunner";
+import { useSkillFeedback } from "./hooks/useSkillFeedback";
 import { DOCUMENT_ROLES, UploadJob } from "./hooks/useDocumentUploads";
 import { insertTextAtSectionEnd } from "./office/insertContent";
 import UploadProgress from "./UploadProgress";
+
+interface RunMeta {
+  skillId: string;
+  skillName: string;
+  matterId: string | null;
+  sectionId: string | null;
+  documentIds: string[];
+}
 
 interface SkillRunnerSectionProps {
   matter: MatterRecord | null;
@@ -29,22 +38,32 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
   const [uploadRole, setUploadRole] = useState<DocumentRole>("exhibit");
   const [message, setMessage] = useState("");
   const { run, output, loading, error } = useSkillRunner();
+  const feedback = useSkillFeedback();
 
   const [editedOutput, setEditedOutput] = useState("");
   const [insertState, setInsertState] = useState<"idle" | "inserting" | "done" | "error">("idle");
   const [insertError, setInsertError] = useState<string | null>(null);
+  const [lastRunMeta, setLastRunMeta] = useState<RunMeta | null>(null);
 
   useEffect(() => {
     if (output !== null) {
       setEditedOutput(output);
       setInsertState("idle");
       setInsertError(null);
+      feedback.reset();
     }
   }, [output]);
 
   const selectedSkill = SKILL_REGISTRY.find((s) => s.skillId === selectedSkillId) ?? null;
 
   const handleRun = () => {
+    setLastRunMeta({
+      skillId: selectedSkill ? selectedSkill.skillId : "none",
+      skillName: selectedSkill ? selectedSkill.displayName : "No Skill (message only)",
+      matterId: matter ? matter.matterId : null,
+      sectionId: activeSection ? activeSection.sectionId : null,
+      documentIds: uploadedDocuments.map((d) => d.documentId),
+    });
     run({ skill: selectedSkill, matter, activeSection, uploadedDocuments, message });
   };
 
@@ -191,6 +210,34 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
             rows={14}
           />
 
+          {lastRunMeta && (
+            <div style={styles.feedbackRow}>
+              <span style={styles.helperText}>Was this output helpful?</span>
+              <button
+                style={{
+                  ...styles.voteButton,
+                  ...(feedback.vote === "up" ? styles.voteButtonActiveUp : {}),
+                }}
+                onClick={() => feedback.submitVote({ vote: "up", ...lastRunMeta })}
+                disabled={feedback.submitting}
+              >
+                👍
+              </button>
+              <button
+                style={{
+                  ...styles.voteButton,
+                  ...(feedback.vote === "down" ? styles.voteButtonActiveDown : {}),
+                }}
+                onClick={() => feedback.submitVote({ vote: "down", ...lastRunMeta })}
+                disabled={feedback.submitting}
+              >
+                👎
+              </button>
+              {feedback.vote && <span style={styles.successText}>Thanks, recorded.</span>}
+              {feedback.error && <span style={styles.feedbackErrorText}>{feedback.error}</span>}
+            </div>
+          )}
+
           <div style={styles.insertRow}>
             <button
               style={styles.insertButton}
@@ -283,6 +330,18 @@ const styles: Record<string, React.CSSProperties> = {
     boxSizing: "border-box",
     resize: "vertical",
   },
+  feedbackRow: { display: "flex", alignItems: "center", gap: "8px", marginTop: "10px" },
+  voteButton: {
+    fontSize: "14px",
+    padding: "2px 8px",
+    cursor: "pointer",
+    border: "1px solid #DDE3EA",
+    borderRadius: "4px",
+    background: "#fff",
+  },
+  voteButtonActiveUp: { background: "#EAF1E8", border: "1px solid #2C5530" },
+  voteButtonActiveDown: { background: "#FBEAEA", border: "1px solid #B3261E" },
+  feedbackErrorText: { fontSize: "11px", color: "#B3261E" },
   insertRow: { display: "flex", gap: "8px", marginTop: "8px" },
   insertButton: {
     fontSize: "12px",

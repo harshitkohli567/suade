@@ -162,3 +162,9 @@ export interface SkillRunRecord {
   outcome: SkillRunOutcome | null; // null while in flight
   createdAt: string; // ISO 8601
 }
+
+// ---------------------------------------------------------------------------
+// Skill run feedback (thumbs up/down on a Skill's output)
+// ---------------------------------------------------------------------------
+
+export type SkillFeedbackVote = "up" | "down";
