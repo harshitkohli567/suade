@@ -75,6 +75,73 @@ src/
 assets/                    Placeholder ribbon icons (16/32/64/80px)
 ```
 
+## Sharing with friends (no AppSource, no local server required on their end)
+
+This deploys the whole app -- task pane + backend, with your Anthropic key
+staying server-side -- to one small always-on host, so a friend can sideload
+a single manifest file and use it without running `npm start`/`npm run
+server` themselves or needing your `.env`.
+
+**This is NOT an AppSource listing.** It's a manually-sideloaded add-in, so
+Word will show a normal "this add-in is not verified" style notice the
+first time -- expected, not an error. Anyone with the manifest file and
+the deployed URL can add documents/run Skills against your Anthropic key,
+so only hand the manifest to people you actually trust, and watch your
+Anthropic usage/billing.
+
+### 1. Deploy to Render
+
+1. Push this repo to GitHub (already done) and go to
+   [dashboard.render.com](https://dashboard.render.com) -- sign up/log in.
+2. **New > Blueprint**, point it at this repo. Render will read
+   `render.yaml` and pre-fill the build/start commands.
+3. When prompted for the `ANTHROPIC_API_KEY` env var, paste your key
+   (Render will *not* commit it anywhere -- it's stored as a secret).
+4. Deploy. Render gives you a URL like `https://suade-addin.onrender.com`
+   (or `https://<your-chosen-name>.onrender.com` if you renamed the
+   service) -- open `/api/health` on that URL and confirm you get
+   `{"status":"ok"}`.
+
+Note: on Render's free plan the service spins down after inactivity and
+takes ~30-60s to wake back up on the next request -- the first Skill run
+after a quiet period may just look like it's hanging. Upgrading to a paid
+plan removes that.
+
+### 2. Point the manifest at your deployed URL
+
+Open [manifest-production.xml](manifest-production.xml) and replace every
+occurrence of `https://suade-addin.onrender.com` with your actual Render
+URL from step 1 (8 places: `IconUrl`, `HighResolutionIconUrl`,
+`SupportUrl`, `AppDomain`, `SourceLocation`, the three icon `bt:Image`
+entries, and the three `bt:Url` entries).
+
+### 3. Give a friend the manifest
+
+Send them just the one file, `manifest-production.xml` (not the whole
+repo -- they don't need Node, npm, or your `.env`). They install it in
+Word:
+
+- **Word desktop (Mac or Windows):** **Insert tab > Add-ins > My Add-ins
+  > Upload My Add-in** (Windows) or **Insert > Add-ins > My Add-ins >
+  gear icon/Upload** (Mac depending on Word version) -- browse to the
+  `manifest-production.xml` file they saved locally.
+- They'll see an "unverified add-in" warning on first load -- expected,
+  click through it.
+- The Suade button then appears on the Home tab, same as your dev setup,
+  but every Skill run/upload now goes to your deployed backend, not
+  localhost.
+
+### Known limitations of this setup, flagged not solved
+
+- **Shared everything.** All friends share one Anthropic Files API
+  workspace and one `skill-feedback.log` -- no per-lawyer isolation,
+  matching the existing single-key architecture (see `server.js`'s
+  header comment). Fine for a few trusted friends testing it, not fine
+  for real client confidentiality at firm scale.
+- **No auth.** Anyone with the manifest URL can use it and spend your
+  API budget. There's no login, no per-user key, no usage cap.
+- **Free-tier cold starts** (see above) if you don't upgrade Render's plan.
+
 ## Known placeholders (intentional, not bugs)
 
 - `assets/icon-*.png` are generated placeholders (navy square, "S"). Swap

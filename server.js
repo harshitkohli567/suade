@@ -49,9 +49,20 @@ const FILES_API_BETA = "files-api-2025-04-14";
 const FEEDBACK_LOG_PATH = path.join(__dirname, "skill-feedback.log");
 const PLACEHOLDER_LAWYER_ID = "current lawyer (placeholder -- no auth built yet)";
 
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "25mb" }));
+
+if (IS_PRODUCTION) {
+  // In production this same server also serves the built task pane
+  // (npm run build's dist/ output) so the whole add-in is one deployable
+  // service on one domain -- no separate static host, no CORS to reason
+  // about. In dev, the webpack dev server (:3000) serves the task pane
+  // instead and this only runs the API on :3001.
+  app.use(express.static(path.join(__dirname, "dist")));
+}
 
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
@@ -227,9 +238,19 @@ function buildPrompt({ skillInstructions, matter, section, uploadedDocuments, me
   return parts.join("\n\n---\n\n");
 }
 
-const PORT = process.env.SUADE_SERVER_PORT || 3001;
-
 async function start() {
+  if (IS_PRODUCTION) {
+    // Render (and most Node PaaS hosts) terminate HTTPS at their proxy and
+    // forward plain HTTP to the port they assign via $PORT -- no cert
+    // handling needed here.
+    const port = process.env.PORT || 3001;
+    app.listen(port, () => {
+      console.log(`Suade backend (production) listening on port ${port}`);
+    });
+    return;
+  }
+
+  const PORT = process.env.SUADE_SERVER_PORT || 3001;
   const httpsOptions = await devCerts.getHttpsServerOptions();
   https.createServer(httpsOptions, app).listen(PORT, () => {
     console.log(`Suade backend listening on https://localhost:${PORT}`);

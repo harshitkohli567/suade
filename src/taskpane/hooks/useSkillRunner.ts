@@ -1,8 +1,7 @@
 import { useState } from "react";
 import { MatterRecord, DocumentSection, SkillRecord, UploadedDocumentRecord } from "@/types";
 import { readSectionText } from "../office/documentText";
-
-const BACKEND_URL = "https://localhost:3001";
+import { BACKEND_URL } from "../config";
 
 interface RunArgs {
   skill: SkillRecord | null;

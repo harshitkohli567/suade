@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { SkillFeedbackVote } from "@/types";
-
-const BACKEND_URL = "https://localhost:3001";
+import { BACKEND_URL } from "../config";
 
 interface SubmitVoteArgs {
   vote: SkillFeedbackVote;

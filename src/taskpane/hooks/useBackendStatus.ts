@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
+import { BACKEND_URL } from "../config";
 
-const BACKEND_URL = "https://localhost:3001";
 const POLL_INTERVAL_MS = 15000;
 const CHECK_TIMEOUT_MS = 4000;
 

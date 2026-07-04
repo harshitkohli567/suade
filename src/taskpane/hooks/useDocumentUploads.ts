@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { UploadedDocumentRecord, DocumentRole } from "@/types";
+import { BACKEND_URL } from "../config";
 
 /**
  * Document upload -- Step 6 (UI + data model) extended in Step 9 to
@@ -18,7 +19,6 @@ import { UploadedDocumentRecord, DocumentRole } from "@/types";
  * there, not a bug in this hook.
  */
 
-const BACKEND_URL = "https://localhost:3001";
 const CONCURRENCY_LIMIT = 3;
 
 export const DOCUMENT_ROLES: DocumentRole[] = [
