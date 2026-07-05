@@ -3,6 +3,9 @@ import { MatterRecord, DocumentSection, SkillRecord, UploadedDocumentRecord } fr
 import { readSectionText } from "../office/documentText";
 import { BACKEND_URL } from "../config";
 
+const POLL_INTERVAL_MS = 3000;
+const POLL_TIMEOUT_MS = 10 * 60 * 1000; // give up after 10 minutes of polling
+
 interface RunArgs {
   skill: SkillRecord | null;
   matter: MatterRecord | null;
@@ -11,6 +14,19 @@ interface RunArgs {
   message: string;
 }
 
+type RunStatus = { status: "pending" } | { status: "done"; output: string } | { status: "error"; error: string };
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * A Skill run can take well over a minute (extended thinking on longer
+ * Skills), and Word's task pane webview aborts a single request that runs
+ * past ~60s. So the backend returns a runId almost immediately and does
+ * the actual Claude call in the background; this polls a small status
+ * endpoint every few seconds instead of holding one long request open.
+ */
 export function useSkillRunner() {
   const [output, setOutput] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -24,7 +40,7 @@ export function useSkillRunner() {
     try {
       const sectionText = args.activeSection ? await readSectionText(args.activeSection) : "";
 
-      const response = await fetch(`${BACKEND_URL}/api/run-skill`, {
+      const startResponse = await fetch(`${BACKEND_URL}/api/run-skill`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -43,16 +59,38 @@ export function useSkillRunner() {
         }),
       });
 
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
+      if (!startResponse.ok) {
+        const body = await startResponse.json().catch(() => ({}));
         throw new Error(
           (body as { error?: string }).error ||
-            `Backend returned HTTP ${response.status}. Is "npm run server" running?`
+            `Backend returned HTTP ${startResponse.status}. Is "npm run server" running?`
         );
       }
 
-      const data = (await response.json()) as { output: string };
-      setOutput(data.output);
+      const { runId } = (await startResponse.json()) as { runId: string };
+
+      const deadline = Date.now() + POLL_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        await sleep(POLL_INTERVAL_MS);
+
+        const pollResponse = await fetch(`${BACKEND_URL}/api/run-skill/${runId}`);
+        if (!pollResponse.ok) {
+          const body = await pollResponse.json().catch(() => ({}));
+          throw new Error((body as { error?: string }).error || `Backend returned HTTP ${pollResponse.status}.`);
+        }
+
+        const result = (await pollResponse.json()) as RunStatus;
+        if (result.status === "done") {
+          setOutput(result.output);
+          return;
+        }
+        if (result.status === "error") {
+          throw new Error(result.error);
+        }
+        // status === "pending" -- keep polling
+      }
+
+      throw new Error("Skill run timed out after 10 minutes without a result.");
     } catch (err) {
       setError(
         err instanceof Error

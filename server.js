@@ -48,6 +48,7 @@ const MAX_TOKENS = 16000;
 const FILES_API_BETA = "files-api-2025-04-14";
 const FEEDBACK_LOG_PATH = path.join(__dirname, "skill-feedback.log");
 const PLACEHOLDER_LAWYER_ID = "current lawyer (placeholder -- no auth built yet)";
+const RUN_TTL_MS = 30 * 60 * 1000; // stale runs get swept so this doesn't grow unbounded
 
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
@@ -67,6 +68,23 @@ if (IS_PRODUCTION) {
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
 });
+
+/**
+ * Skill runs can take well over a minute (extended thinking on longer
+ * Skills), and Word's task pane webview aborts a single request that runs
+ * past ~60s. So /api/run-skill kicks the Claude call off in the
+ * background and returns a runId immediately; the task pane polls
+ * /api/run-skill/:runId every few seconds for the result instead of
+ * holding one long-lived connection open.
+ */
+const skillRuns = new Map(); // runId -> { status: "pending" | "done" | "error", output?, error?, createdAt }
+
+setInterval(() => {
+  const cutoff = Date.now() - RUN_TTL_MS;
+  for (const [runId, run] of skillRuns) {
+    if (run.createdAt < cutoff) skillRuns.delete(runId);
+  }
+}, 5 * 60 * 1000);
 
 app.post("/api/upload-document", async (req, res) => {
   try {
@@ -94,7 +112,7 @@ app.post("/api/upload-document", async (req, res) => {
   }
 });
 
-app.post("/api/run-skill", async (req, res) => {
+app.post("/api/run-skill", (req, res) => {
   try {
     const { skillId, sourceFile, matter, section, uploadedDocuments, message } = req.body;
 
@@ -115,6 +133,29 @@ app.post("/api/run-skill", async (req, res) => {
       skillInstructions = fs.readFileSync(skillPath, "utf8");
     }
 
+    const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    skillRuns.set(runId, { status: "pending", createdAt: Date.now() });
+    res.json({ runId });
+
+    // Fire-and-forget: the response above already went out, so a slow
+    // Claude call here can't be aborted by Word's request timeout.
+    executeSkillRun(runId, { skillInstructions, matter, section, uploadedDocuments, message });
+  } catch (err) {
+    console.error("Suade backend error:", err);
+    res.status(500).json({ error: err.message || "Unknown server error." });
+  }
+});
+
+app.get("/api/run-skill/:runId", (req, res) => {
+  const run = skillRuns.get(req.params.runId);
+  if (!run) {
+    return res.status(404).json({ error: "Unknown or expired runId." });
+  }
+  res.json(run);
+});
+
+async function executeSkillRun(runId, { skillInstructions, matter, section, uploadedDocuments, message }) {
+  try {
     const prompt = buildPrompt({ skillInstructions, matter, section, uploadedDocuments, message });
 
     const content = [{ type: "text", text: prompt }];
@@ -132,13 +173,14 @@ app.post("/api/run-skill", async (req, res) => {
       messages: [{ role: "user", content }],
     });
 
-    console.log("Suade DEBUG: response block types:", response.content.map((b) => b.type), "| stop_reason:", response.stop_reason);    const textBlock = response.content.find((block) => block.type === "text");
-    res.json({ output: textBlock ? textBlock.text : "" });
+    console.log("Suade DEBUG: response block types:", response.content.map((b) => b.type), "| stop_reason:", response.stop_reason);
+    const textBlock = response.content.find((block) => block.type === "text");
+    skillRuns.set(runId, { status: "done", output: textBlock ? textBlock.text : "", createdAt: Date.now() });
   } catch (err) {
     console.error("Suade backend error:", err);
-    res.status(500).json({ error: err.message || "Unknown server error." });
+    skillRuns.set(runId, { status: "error", error: err.message || "Unknown server error.", createdAt: Date.now() });
   }
-});
+}
 
 app.post("/api/skill-feedback", (req, res) => {
   try {
