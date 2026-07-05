@@ -7,9 +7,9 @@
   xsi:type="TaskPaneApp">
 
   <!--
-    Suade -- production manifest for sideloading onto a friend's own Word.
+    Suade: production manifest for sideloading onto a friend's own Word.
     Points at the deployed Render service, NOT localhost. This is not an
-    AppSource submission -- Word will still show an "unverified add-in"
+    AppSource submission; Word will still show an "unverified add-in"
     style warning on first load, which is expected for a manually
     sideloaded manifest. See README.md's "Sharing with friends" section
     for exactly how a friend installs this file.
