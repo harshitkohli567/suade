@@ -102,10 +102,11 @@ Anthropic usage/billing.
    service) -- open `/api/health` on that URL and confirm you get
    `{"status":"ok"}`.
 
-Note: on Render's free plan the service spins down after inactivity and
-takes ~30-60s to wake back up on the next request -- the first Skill run
-after a quiet period may just look like it's hanging. Upgrading to a paid
-plan removes that.
+Note: on Render's free instance type the service spins down after
+inactivity and takes ~30-60s to wake back up on the next request -- the
+first Skill run after a quiet period may just look like it's hanging.
+A paid instance type (this repo's `render.yaml` is set to `pro`) stays
+always-on and avoids that.
 
 ### 2. Point the manifest at your deployed URL
 
@@ -140,7 +141,7 @@ Word:
   for real client confidentiality at firm scale.
 - **No auth.** Anyone with the manifest URL can use it and spend your
   API budget. There's no login, no per-user key, no usage cap.
-- **Free-tier cold starts** (see above) if you don't upgrade Render's plan.
+- **Free-tier cold starts** (see above) if you drop back to a free instance type.
 
 ## Known placeholders (intentional, not bugs)
 
