@@ -15,6 +15,10 @@ interface RunMeta {
   documentIds: string[];
 }
 
+function formatTraceTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], { hour12: false });
+}
+
 interface SkillRunnerSectionProps {
   matter: MatterRecord | null;
   activeSection: DocumentSection | null;
@@ -43,7 +47,7 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
   const [selectedSkillId, setSelectedSkillId] = useState("");
   const [uploadRole, setUploadRole] = useState<DocumentRole>("exhibit");
   const [message, setMessage] = useState("");
-  const { run, output, loading, error } = useSkillRunner();
+  const { run, output, loading, error, trace } = useSkillRunner();
   const feedback = useSkillFeedback();
 
   const [editedOutput, setEditedOutput] = useState("");
@@ -51,6 +55,7 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
   const [insertError, setInsertError] = useState<string | null>(null);
   const [lastRunMeta, setLastRunMeta] = useState<RunMeta | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [traceCollapsed, setTraceCollapsed] = useState(false);
 
   useEffect(() => {
     if (!loading) return;
@@ -237,6 +242,26 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
         )}
       </div>
 
+      {trace.length > 0 && (
+        <div style={styles.tracePanel}>
+          <div style={styles.traceHeader}>
+            <p style={styles.traceTitle}>Backend activity</p>
+            <button style={styles.traceCollapseButton} onClick={() => setTraceCollapsed((p) => !p)}>
+              {traceCollapsed ? "Show" : "Hide"}
+            </button>
+          </div>
+          {!traceCollapsed && (
+            <ul style={styles.traceList}>
+              {trace.map((entry, i) => (
+                <li key={i}>
+                  <span style={styles.traceTime}>{formatTraceTime(entry.at)}</span> {entry.message}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
       {error && (
         <div style={styles.errorBox}>
           <strong>Error:</strong> {error}
@@ -362,6 +387,34 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: "8px",
   },
   runRow: { display: "flex", alignItems: "center", gap: "10px", marginTop: "4px" },
+  tracePanel: {
+    marginTop: "10px",
+    fontSize: "11px",
+    background: "#F5F7FA",
+    border: "1px solid #DDE3EA",
+    borderRadius: "4px",
+    padding: "8px 10px",
+  },
+  traceHeader: { display: "flex", justifyContent: "space-between", alignItems: "center" },
+  traceTitle: { fontWeight: 700, margin: 0, color: "#5B6470" },
+  traceCollapseButton: {
+    fontSize: "11px",
+    padding: "2px 8px",
+    cursor: "pointer",
+    border: "1px solid #DDE3EA",
+    borderRadius: "3px",
+    background: "#fff",
+    color: "#5B6470",
+  },
+  traceList: {
+    listStyle: "none",
+    margin: "8px 0 0 0",
+    padding: 0,
+    lineHeight: 1.7,
+    maxHeight: "150px",
+    overflowY: "auto",
+  },
+  traceTime: { fontFamily: "Menlo, Consolas, monospace", color: "#8A93A0", marginRight: "6px" },
   runButton: {
     fontSize: "12px",
     padding: "8px 12px",

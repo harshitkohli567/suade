@@ -83,7 +83,18 @@ app.get("/api/health", (req, res) => {
  * /api/run-skill/:runId every few seconds for the result instead of
  * holding one long-lived connection open.
  */
-const skillRuns = new Map(); // runId -> { status: "pending" | "done" | "error", output?, error?, createdAt }
+const skillRuns = new Map(); // runId -> { status: "pending" | "done" | "error", output?, error?, createdAt, trace }
+
+/**
+ * Execution trace shown live in the task pane's "Backend activity" panel.
+ * Each entry corresponds to real code actually reaching that point -- do
+ * not add aspirational/decorative entries the backend can't vouch for.
+ */
+function addTrace(runId, message) {
+  const run = skillRuns.get(runId);
+  if (!run) return;
+  run.trace.push({ at: new Date().toISOString(), message });
+}
 
 setInterval(() => {
   const cutoff = Date.now() - RUN_TTL_MS;
@@ -183,7 +194,14 @@ app.post("/api/run-skill", (req, res) => {
     }
 
     const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    skillRuns.set(runId, { status: "pending", createdAt: Date.now() });
+    skillRuns.set(runId, { status: "pending", createdAt: Date.now(), trace: [] });
+    addTrace(runId, "Request received");
+    addTrace(
+      runId,
+      skillInstructions
+        ? `Loaded Skill: ${sourceFile} (${(skillInstructions.length / 1024).toFixed(1)} KB)`
+        : "No Skill selected -- message-only run"
+    );
     res.json({ runId });
 
     // Fire-and-forget: the response above already went out, so a slow
@@ -204,15 +222,27 @@ app.get("/api/run-skill/:runId", (req, res) => {
 });
 
 async function executeSkillRun(runId, { skillInstructions, matter, section, uploadedDocuments, message }) {
+  const startedAt = Date.now();
   try {
+    const fileAttachments = (uploadedDocuments || []).filter((d) => d.fileId);
+    addTrace(
+      runId,
+      fileAttachments.length > 0
+        ? `Attached ${fileAttachments.length} document${fileAttachments.length === 1 ? "" : "s"}: ${fileAttachments
+            .map((d) => d.filename)
+            .join(", ")}`
+        : "No documents attached"
+    );
+
     const prompt = buildPrompt({ skillInstructions, matter, section, uploadedDocuments, message });
+    addTrace(runId, `Prompt assembled: ${prompt.length.toLocaleString()} characters`);
 
     const content = [{ type: "text", text: prompt }];
-    const fileAttachments = (uploadedDocuments || []).filter((d) => d.fileId);
     for (const doc of fileAttachments) {
       content.push({ type: "document", source: { type: "file", file_id: doc.fileId } });
     }
 
+    addTrace(runId, `Claude API call started (model ${MODEL})`);
     const response = await anthropic.beta.messages.create({
       model: MODEL,
       max_tokens: MAX_TOKENS,
@@ -224,10 +254,28 @@ async function executeSkillRun(runId, { skillInstructions, matter, section, uplo
 
     console.log("Suade DEBUG: response block types:", response.content.map((b) => b.type), "| stop_reason:", response.stop_reason);
     const textBlock = response.content.find((block) => block.type === "text");
-    skillRuns.set(runId, { status: "done", output: textBlock ? textBlock.text : "", createdAt: Date.now() });
+    const output = textBlock ? textBlock.text : "";
+    const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+    addTrace(runId, `Response complete: ${output.length.toLocaleString()} characters in ${seconds}s`);
+
+    // Mutate rather than replace so the accumulated trace survives; bump
+    // createdAt so the TTL sweep counts from completion, not run start.
+    const run = skillRuns.get(runId);
+    if (run) {
+      run.status = "done";
+      run.output = output;
+      run.createdAt = Date.now();
+    }
   } catch (err) {
     console.error("Suade backend error:", err);
-    skillRuns.set(runId, { status: "error", error: err.message || "Unknown server error.", createdAt: Date.now() });
+    const errorMessage = err.message || "Unknown server error.";
+    addTrace(runId, `Error: ${errorMessage}`);
+    const run = skillRuns.get(runId);
+    if (run) {
+      run.status = "error";
+      run.error = errorMessage;
+      run.createdAt = Date.now();
+    }
   }
 }
 

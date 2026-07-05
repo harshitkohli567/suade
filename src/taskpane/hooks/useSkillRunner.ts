@@ -14,7 +14,15 @@ interface RunArgs {
   message: string;
 }
 
-type RunStatus = { status: "pending" } | { status: "done"; output: string } | { status: "error"; error: string };
+export interface TraceEntry {
+  at: string; // ISO 8601
+  message: string;
+}
+
+type RunStatus =
+  | { status: "pending"; trace?: TraceEntry[] }
+  | { status: "done"; output: string; trace?: TraceEntry[] }
+  | { status: "error"; error: string; trace?: TraceEntry[] };
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -31,11 +39,13 @@ export function useSkillRunner() {
   const [output, setOutput] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [trace, setTrace] = useState<TraceEntry[]>([]);
 
   const run = async (args: RunArgs) => {
     setLoading(true);
     setError(null);
     setOutput(null);
+    setTrace([]);
 
     try {
       const sectionText = args.activeSection ? await readSectionText(args.activeSection) : "";
@@ -80,6 +90,9 @@ export function useSkillRunner() {
         }
 
         const result = (await pollResponse.json()) as RunStatus;
+        if (result.trace) {
+          setTrace(result.trace);
+        }
         if (result.status === "done") {
           setOutput(result.output);
           return;
@@ -102,5 +115,5 @@ export function useSkillRunner() {
     }
   };
 
-  return { run, output, loading, error };
+  return { run, output, loading, error, trace };
 }
