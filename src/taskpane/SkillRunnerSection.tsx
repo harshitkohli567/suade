@@ -44,6 +44,17 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
   const [insertState, setInsertState] = useState<"idle" | "inserting" | "done" | "error">("idle");
   const [insertError, setInsertError] = useState<string | null>(null);
   const [lastRunMeta, setLastRunMeta] = useState<RunMeta | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  useEffect(() => {
+    if (!loading) return;
+    setElapsedSeconds(0);
+    const start = Date.now();
+    const interval = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [loading]);
 
   useEffect(() => {
     if (output !== null) {
@@ -187,7 +198,7 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
       />
 
       <button style={styles.runButton} onClick={handleRun} disabled={loading}>
-        {loading ? "Running…" : "Enter"}
+        {loading ? `Running… ${elapsedSeconds}s elapsed` : "Enter"}
       </button>
 
       {error && (
