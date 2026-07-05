@@ -8,6 +8,7 @@ const https = require("https");
 const Anthropic = require("@anthropic-ai/sdk");
 const { toFile } = require("@anthropic-ai/sdk");
 const devCerts = require("office-addin-dev-certs");
+const mammoth = require("mammoth");
 
 /**
  * Suade backend (Step 7, extended Step 9). Holds the Anthropic API key
@@ -24,11 +25,16 @@ const devCerts = require("office-addin-dev-certs");
  * per matter, account-scoped" assumption (FR-10.7) needs revisiting once
  * real multi-lawyer usage and auth exist -- not solved here, flagged.
  *
- * UNTESTED / uncertain: Anthropic's documentation for the "document"
- * content block via file_id is written around PDFs. DOCX support through
- * this exact path is not clearly documented. If DOCX uploads fail or
- * Claude can't read them, that's the most likely place -- tell me the
- * exact error and we'll add a conversion step rather than guess again.
+ * DOCX handling: confirmed (not guessed) that Anthropic's Files API
+ * document block rejects DOCX outright -- "Only PDF and plaintext
+ * documents are supported" (tested directly against the API). So a DOCX
+ * upload here gets its text extracted via mammoth and THAT plaintext is
+ * what actually gets uploaded/attached, not the original .docx bytes.
+ * This loses layout/formatting (tables collapse to concatenated cell
+ * text, no styling) but preserves the actual textual content, which is
+ * what Skills need. If a lawyer reports a Skill missing something that
+ * was clearly in a table or text box in the original DOCX, that's the
+ * likely cause -- not a bug in the Skill itself.
  */
 
 if (!process.env.ANTHROPIC_API_KEY) {
@@ -86,6 +92,8 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
+const DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
 app.post("/api/upload-document", async (req, res) => {
   try {
     const { filename, mimeType, base64Content } = req.body;
@@ -95,8 +103,33 @@ app.post("/api/upload-document", async (req, res) => {
     }
 
     const buffer = Buffer.from(base64Content, "base64");
+
+    let uploadBuffer = buffer;
+    let uploadFilename = filename;
+    let uploadMimeType = mimeType;
+
+    if (mimeType === DOCX_MIME_TYPE || filename.toLowerCase().endsWith(".docx")) {
+      let extractedText;
+      try {
+        ({ value: extractedText } = await mammoth.extractRawText({ buffer }));
+      } catch (extractErr) {
+        console.error("Suade backend DOCX extraction error:", extractErr);
+        return res.status(422).json({
+          error: `Couldn't read ${filename} as a DOCX file -- it may be corrupted or not a real .docx.`,
+        });
+      }
+      if (!extractedText.trim()) {
+        return res.status(422).json({
+          error: `Could not extract any text from ${filename} -- it may be empty, image-only, or corrupted.`,
+        });
+      }
+      uploadBuffer = Buffer.from(extractedText, "utf8");
+      uploadFilename = `${filename}.txt`;
+      uploadMimeType = "text/plain";
+    }
+
     const uploaded = await anthropic.beta.files.upload({
-      file: await toFile(buffer, filename, { type: mimeType }),
+      file: await toFile(uploadBuffer, uploadFilename, { type: uploadMimeType }),
       betas: [FILES_API_BETA],
     });
 
