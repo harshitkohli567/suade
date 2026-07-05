@@ -145,6 +145,22 @@ app.post("/api/upload-document", async (req, res) => {
   }
 });
 
+app.delete("/api/upload-document/:fileId", async (req, res) => {
+  try {
+    await anthropic.beta.files.delete(req.params.fileId, { betas: [FILES_API_BETA] });
+    res.json({ ok: true });
+  } catch (err) {
+    // Anthropic 404s if the file is already gone -- treat that as success
+    // rather than an error, since the end state the caller wants (the
+    // file not existing) is already true.
+    if (err && err.status === 404) {
+      return res.json({ ok: true });
+    }
+    console.error("Suade backend delete error:", err);
+    res.status(500).json({ error: err.message || "Unknown error deleting file." });
+  }
+});
+
 app.post("/api/run-skill", (req, res) => {
   try {
     const { skillId, sourceFile, matter, section, uploadedDocuments, message } = req.body;

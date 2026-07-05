@@ -23,6 +23,9 @@ interface SkillRunnerSectionProps {
   uploading: boolean;
   uploadError: string | null;
   uploadJobs: UploadJob[];
+  removeDocument: (documentId: string) => Promise<void>;
+  removingDocumentIds: string[];
+  removeError: string | null;
 }
 
 const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
@@ -33,6 +36,9 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
   uploading,
   uploadError,
   uploadJobs,
+  removeDocument,
+  removingDocumentIds,
+  removeError,
 }) => {
   const [selectedSkillId, setSelectedSkillId] = useState("");
   const [uploadRole, setUploadRole] = useState<DocumentRole>("exhibit");
@@ -181,11 +187,32 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
         </div>
       )}
 
+      {removeError && (
+        <div style={styles.errorBox}>
+          <strong>Remove error:</strong> {removeError}
+        </div>
+      )}
+
       {uploadedDocuments.length > 0 && (
-        <p style={styles.helperText}>
-          {uploadedDocuments.length} document{uploadedDocuments.length === 1 ? "" : "s"} attached for
-          this matter.
-        </p>
+        <ul style={styles.documentList}>
+          {uploadedDocuments.map((doc) => {
+            const isRemoving = removingDocumentIds.includes(doc.documentId);
+            return (
+              <li key={doc.documentId} style={styles.documentListItem}>
+                <span style={styles.documentListText}>
+                  {doc.filename} <em>({doc.documentRole})</em>
+                </span>
+                <button
+                  style={styles.removeButton}
+                  onClick={() => removeDocument(doc.documentId)}
+                  disabled={isRemoving}
+                >
+                  {isRemoving ? "Removing…" : "Remove"}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
       )}
 
       <p style={styles.fieldLabel}>Message to Claude</p>
@@ -301,6 +328,27 @@ const styles: Record<string, React.CSSProperties> = {
   uploadRow: { display: "flex", gap: "8px", alignItems: "center", marginBottom: "6px" },
   uploadRoleSelect: { fontSize: "12px", padding: "4px" },
   fileInput: { fontSize: "12px" },
+  documentList: { listStyle: "none", margin: "4px 0 8px 0", padding: 0 },
+  documentListItem: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "8px",
+    fontSize: "12px",
+    padding: "4px 0",
+    borderBottom: "1px solid #EDEFF2",
+  },
+  documentListText: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  removeButton: {
+    fontSize: "11px",
+    padding: "2px 8px",
+    cursor: "pointer",
+    border: "1px solid #DDE3EA",
+    borderRadius: "3px",
+    background: "#fff",
+    color: "#5B6470",
+    flexShrink: 0,
+  },
   select: { fontSize: "12px", padding: "4px", width: "100%", marginBottom: "6px" },
   messageTextarea: {
     width: "100%",

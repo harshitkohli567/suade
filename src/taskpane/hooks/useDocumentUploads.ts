@@ -13,10 +13,9 @@ import { BACKEND_URL } from "../config";
  * discovery bundle) doesn't serialize into one file at a time -- but also
  * doesn't fire hundreds of simultaneous HTTPS requests at the local backend.
  *
- * UNTESTED end-to-end for DOCX specifically -- see server.js's header
- * comment. If a DOCX upload succeeds here but a Skill run can't actually
- * read its content, that's the DOCX-via-Files-API uncertainty flagged
- * there, not a bug in this hook.
+ * removeDocument calls the backend to actually delete the file from
+ * Anthropic's Files API (not just drop it from local state) -- otherwise
+ * "removed" documents would keep sitting in the shared workspace forever.
  */
 
 const CONCURRENCY_LIMIT = 3;
@@ -85,6 +84,8 @@ export function useDocumentUploads() {
   const [uploadJobs, setUploadJobs] = useState<UploadJob[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [removingDocumentIds, setRemovingDocumentIds] = useState<string[]>([]);
+  const [removeError, setRemoveError] = useState<string | null>(null);
 
   const updateJob = (jobId: string, patch: Partial<UploadJob>) => {
     setUploadJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, ...patch } : j)));
@@ -156,8 +157,29 @@ export function useDocumentUploads() {
     setUploading(false);
   };
 
-  const removeDocument = (documentId: string) => {
-    setDocuments((prev) => prev.filter((d) => d.documentId !== documentId));
+  const removeDocument = async (documentId: string) => {
+    const doc = documents.find((d) => d.documentId === documentId);
+    if (!doc) return;
+
+    setRemoveError(null);
+    setRemovingDocumentIds((prev) => [...prev, documentId]);
+
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/upload-document/${doc.claudeFileReference}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error || `Remove failed (HTTP ${response.status}).`);
+      }
+
+      setDocuments((prev) => prev.filter((d) => d.documentId !== documentId));
+    } catch (err) {
+      setRemoveError(err instanceof Error ? err.message : "Unknown error removing document.");
+    } finally {
+      setRemovingDocumentIds((prev) => prev.filter((id) => id !== documentId));
+    }
   };
 
   const documentsForMatter = (matterId: string): UploadedDocumentRecord[] =>
@@ -170,5 +192,7 @@ export function useDocumentUploads() {
     uploading,
     uploadError,
     uploadJobs,
+    removingDocumentIds,
+    removeError,
   };
 }

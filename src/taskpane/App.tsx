@@ -115,6 +115,9 @@ const App: React.FC = () => {
         uploading={documentUploads.uploading}
         uploadError={documentUploads.uploadError}
         uploadJobs={documentUploads.uploadJobs}
+        removeDocument={documentUploads.removeDocument}
+        removingDocumentIds={documentUploads.removingDocumentIds}
+        removeError={documentUploads.removeError}
       />
 
       <hr style={styles.divider} />
