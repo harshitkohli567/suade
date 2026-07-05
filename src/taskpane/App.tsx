@@ -38,16 +38,6 @@ const App: React.FC = () => {
             {context.paragraphIndex >= 0 ? context.paragraphIndex : "(none detected)"}
           </dd>
 
-          <dt style={styles.fieldLabel}>Current paragraph text</dt>
-          <dd style={styles.fieldValue}>
-            {context.paragraphText ? context.paragraphText : <em>(empty)</em>}
-          </dd>
-
-          <dt style={styles.fieldLabel}>Selected text</dt>
-          <dd style={styles.fieldValue}>
-            {context.selectedText ? context.selectedText : <em>(no selection)</em>}
-          </dd>
-
           <dt style={styles.fieldLabel}>Active section</dt>
           <dd style={styles.fieldValue}>
             {context.activeSection ? (
