@@ -43,6 +43,24 @@ function stripPartySuffix(name: string): string {
 
 const CONFIDENCE_ORDER: Record<MatchConfidence, number> = { high: 0, medium: 1, low: 2 };
 
+/**
+ * Which match, if any, is safe to auto-resolve into "the" matter:
+ *   - a high (matter-ID) match always wins;
+ *   - a medium (both party names) match auto-resolves only when it's the
+ *     ONLY medium candidate -- if two matters share the same party pair,
+ *     neither is safe to pick automatically;
+ *   - low (single name) matches never auto-resolve, per FR-8.4.
+ */
+export function resolveAutoMatch(results: MatterMatchResult[]): MatterMatchResult | null {
+  const high = results.find((r) => r.confidence === "high");
+  if (high) return high;
+
+  const mediums = results.filter((r) => r.confidence === "medium");
+  if (mediums.length === 1) return mediums[0];
+
+  return null;
+}
+
 export function findMatterMatches(documentText: string, matters: MatterRecord[]): MatterMatchResult[] {
   const normalizedDoc = normalize(documentText);
   const results: MatterMatchResult[] = [];

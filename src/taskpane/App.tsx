@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { useDocumentContext } from "./hooks/useDocumentContext";
 import { useSectionDebug } from "./hooks/useSectionDebug";
 import { useMatterDetection } from "./hooks/useMatterDetection";
+import { resolveAutoMatch } from "@/data/matters/matterMatching";
 import { useDocumentUploads } from "./hooks/useDocumentUploads";
 import SkillRunnerSection from "./SkillRunnerSection";
 import BackendStatus from "./BackendStatus";
@@ -12,7 +13,7 @@ const App: React.FC = () => {
   const matterDetection = useMatterDetection();
   const documentUploads = useDocumentUploads();
   const boldSignals = debug.signals.filter((s) => s.bold);
-  const highMatch = matterDetection.results.find((r) => r.confidence === "high");
+  const resolvedMatch = resolveAutoMatch(matterDetection.results);
   const [matterCardCollapsed, setMatterCardCollapsed] = useState(false);
   const [diagnosticsCollapsed, setDiagnosticsCollapsed] = useState(false);
 
@@ -64,11 +65,11 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {highMatch && (
+      {resolvedMatch && (
         <div style={styles.matterCard}>
           <div style={styles.matterCardHeader}>
             <p style={styles.matterCardTitle}>
-              {matterCardCollapsed ? highMatch.matter.matterId : "Resolved Matter"}
+              {matterCardCollapsed ? resolvedMatch.matter.matterId : "Resolved Matter"}
             </p>
             <button
               style={styles.collapseButton}
@@ -81,36 +82,38 @@ const App: React.FC = () => {
           {!matterCardCollapsed && (
             <dl style={styles.fieldList}>
               <dt style={styles.fieldLabel}>Matter ID</dt>
-              <dd style={styles.fieldValue}>{highMatch.matter.matterId}</dd>
+              <dd style={styles.fieldValue}>{resolvedMatch.matter.matterId}</dd>
               <dt style={styles.fieldLabel}>Client</dt>
-              <dd style={styles.fieldValue}>{highMatch.matter.client}</dd>
+              <dd style={styles.fieldValue}>{resolvedMatch.matter.client}</dd>
               <dt style={styles.fieldLabel}>Represented side</dt>
-              <dd style={styles.fieldValue}>{highMatch.matter.representedSide}</dd>
+              <dd style={styles.fieldValue}>{resolvedMatch.matter.representedSide}</dd>
               <dt style={styles.fieldLabel}>Counterparty</dt>
-              <dd style={styles.fieldValue}>{highMatch.matter.counterparty}</dd>
+              <dd style={styles.fieldValue}>{resolvedMatch.matter.counterparty}</dd>
               <dt style={styles.fieldLabel}>Matter type</dt>
-              <dd style={styles.fieldValue}>{highMatch.matter.matterType}</dd>
+              <dd style={styles.fieldValue}>{resolvedMatch.matter.matterType}</dd>
               <dt style={styles.fieldLabel}>Governing law</dt>
-              <dd style={styles.fieldValue}>{highMatch.matter.governingLaw}</dd>
+              <dd style={styles.fieldValue}>{resolvedMatch.matter.governingLaw}</dd>
               <dt style={styles.fieldLabel}>Institution / seat</dt>
-              <dd style={styles.fieldValue}>{highMatch.matter.institutionSeat}</dd>
+              <dd style={styles.fieldValue}>{resolvedMatch.matter.institutionSeat}</dd>
               <dt style={styles.fieldLabel}>Responsible team</dt>
-              <dd style={styles.fieldValue}>{highMatch.matter.responsibleLawyerTeam}</dd>
+              <dd style={styles.fieldValue}>{resolvedMatch.matter.responsibleLawyerTeam}</dd>
             </dl>
           )}
+
+          {!matterCardCollapsed && <p style={styles.matchReason}>{resolvedMatch.reason}</p>}
         </div>
       )}
 
-      {!highMatch && matterDetection.hasRun && (
+      {!resolvedMatch && matterDetection.hasRun && (
         <p style={styles.body}>No matter detected in this document.</p>
       )}
 
       <hr style={styles.divider} />
 
       <SkillRunnerSection
-        matter={highMatch ? highMatch.matter : null}
+        matter={resolvedMatch ? resolvedMatch.matter : null}
         activeSection={context ? context.activeSection : null}
-        uploadedDocuments={highMatch ? documentUploads.documentsForMatter(highMatch.matter.matterId) : []}
+        uploadedDocuments={resolvedMatch ? documentUploads.documentsForMatter(resolvedMatch.matter.matterId) : []}
         uploadDocuments={documentUploads.uploadDocuments}
         uploading={documentUploads.uploading}
         uploadError={documentUploads.uploadError}
@@ -219,6 +222,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "10px",
   },
   matterCardTitle: { fontWeight: 700, margin: 0, color: "#2C5530" },
+  matchReason: { fontSize: "11px", fontStyle: "italic", color: "#2C5530", margin: "8px 0 0 0", lineHeight: 1.5 },
   matterCardHeader: { display: "flex", justifyContent: "space-between", alignItems: "center" },
   collapseButton: {
     fontSize: "11px",
