@@ -105,7 +105,7 @@ Anthropic usage/billing.
 Note: on Render's free instance type the service spins down after
 inactivity and takes ~30-60s to wake back up on the next request -- the
 first Skill run after a quiet period may just look like it's hanging.
-A paid instance type (this repo's `render.yaml` is set to `pro`) stays
+A paid instance type (this repo's `render.yaml` is set to `starter`) stays
 always-on and avoids that.
 
 ### 2. Point the manifest at your deployed URL
