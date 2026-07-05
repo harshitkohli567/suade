@@ -197,9 +197,18 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
         rows={4}
       />
 
-      <button style={styles.runButton} onClick={handleRun} disabled={loading}>
-        {loading ? `Running… ${elapsedSeconds}s elapsed` : "Enter"}
-      </button>
+      <style>{"@keyframes suade-spin { to { transform: rotate(360deg); } }"}</style>
+      <div style={styles.runRow}>
+        <button style={styles.runButton} onClick={handleRun} disabled={loading}>
+          Enter
+        </button>
+        {loading && (
+          <div style={styles.runningIndicator}>
+            <span style={styles.spinner} />
+            <span style={styles.runningText}>Running… {elapsedSeconds}s elapsed</span>
+          </div>
+        )}
+      </div>
 
       {error && (
         <div style={styles.errorBox}>
@@ -304,6 +313,7 @@ const styles: Record<string, React.CSSProperties> = {
     resize: "vertical",
     marginBottom: "8px",
   },
+  runRow: { display: "flex", alignItems: "center", gap: "10px", marginTop: "4px" },
   runButton: {
     fontSize: "12px",
     padding: "8px 12px",
@@ -312,8 +322,19 @@ const styles: Record<string, React.CSSProperties> = {
     border: "none",
     borderRadius: "4px",
     cursor: "pointer",
-    marginTop: "4px",
   },
+  runningIndicator: { display: "flex", alignItems: "center", gap: "6px" },
+  spinner: {
+    width: "14px",
+    height: "14px",
+    borderRadius: "50%",
+    border: "2px solid #D9D9D9",
+    borderTopColor: "#D9D9D9",
+    borderRightColor: "transparent",
+    animation: "suade-spin 0.7s linear infinite",
+    display: "inline-block",
+  },
+  runningText: { fontSize: "12px", color: "#5B6470" },
   errorBox: {
     fontSize: "13px",
     background: "#FBEAEA",
