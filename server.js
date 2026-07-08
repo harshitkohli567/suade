@@ -499,7 +499,8 @@ app.post("/api/skill-coach/classify", async (req, res) => {
     const textBlock = response.content.find((b) => b.type === "text");
     const parsed = parseCoachJson(textBlock ? textBlock.text : "");
     console.log(
-      `Suade Skill Coach: classified follow-up on ${skillId} (matter ${matterId || "n/a"}) as ${parsed.category}`
+      `Suade Skill Coach: classified follow-up on ${skillId} (matter ${matterId || "n/a"}) as ${parsed.category}` +
+        ` -- message: "${String(lawyerMessage).slice(0, 100)}${String(lawyerMessage).length > 100 ? "…" : ""}"`
     );
 
     if (parsed.category === "none" || !parsed.targetSection || !parsed.insertText) {

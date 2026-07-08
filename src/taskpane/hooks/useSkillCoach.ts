@@ -146,7 +146,12 @@ export function useSkillCoach() {
 
       const data = (await response.json()) as ClassifyResponse;
 
-      if (data.category === "none") return;
+      if (data.category === "none") {
+        // Nothing is shown for "none" by design -- log it so a tester can
+        // tell "correctly suppressed" apart from "never fired".
+        console.log(`Skill Coach: follow-up classified as "none" for ${args.skillId}; no update proposed.`);
+        return;
+      }
 
       if (data.requiresManualReview) {
         setState({ phase: "manual-review", skillName: data.skillName, targetSection: data.targetSection ?? null });
