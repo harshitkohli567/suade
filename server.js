@@ -9,6 +9,12 @@ const Anthropic = require("@anthropic-ai/sdk");
 const { toFile } = require("@anthropic-ai/sdk");
 const devCerts = require("office-addin-dev-certs");
 const mammoth = require("mammoth");
+const {
+  sanitizeLawyerId,
+  isProtectedSection,
+  applyEditToMarkdown,
+  buildInsertionDiff,
+} = require("./skillCoachUtils");
 
 /**
  * Suade backend (Step 7, extended Step 9). Holds the Anthropic API key
@@ -55,6 +61,16 @@ const FILES_API_BETA = "files-api-2025-04-14";
 const FEEDBACK_LOG_PATH = path.join(__dirname, "skill-feedback.log");
 const PLACEHOLDER_LAWYER_ID = "current lawyer (placeholder -- no auth built yet)";
 const RUN_TTL_MS = 30 * 60 * 1000; // stale runs get swept so this doesn't grow unbounded
+
+// Minimal Skill-run log (Activity Graph FR-2.1): which Skill produced which
+// output, for which matter, when. JSONL, appended on each completed run.
+const SKILL_RUNS_LOG_PATH = path.join(__dirname, "skill-runs.log");
+
+// Per-lawyer personal Skill copies + their version history (Skill Coach).
+const PERSONAL_SKILLS_DIR = path.join(__dirname, "skills", "personal");
+const SKILL_ID_RE = /^[a-z0-9-]+$/;
+
+const COACH_CATEGORIES = ["new_step", "new_checklist_item", "domain_insight", "best_practice", "none"];
 
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
@@ -172,25 +188,97 @@ app.delete("/api/upload-document/:fileId", async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Skill store helpers (firm defaults + per-lawyer personal copies)
+// ---------------------------------------------------------------------------
+
+function firmDefaultPathFor(skillId) {
+  return path.join(SKILLS_DIR, `${skillId}.md`);
+}
+
+function personalPathFor(lawyerId, skillId) {
+  return path.join(PERSONAL_SKILLS_DIR, sanitizeLawyerId(lawyerId), `${skillId}.md`);
+}
+
+function versionsPathFor(lawyerId, skillId) {
+  return path.join(PERSONAL_SKILLS_DIR, sanitizeLawyerId(lawyerId), `${skillId}.versions.json`);
+}
+
+/** Personal copy if one exists for this lawyer, else the firm default. */
+function loadSkillMarkdown(lawyerId, skillId) {
+  const personalPath = personalPathFor(lawyerId, skillId);
+  if (fs.existsSync(personalPath)) {
+    return { content: fs.readFileSync(personalPath, "utf8"), source: "personal" };
+  }
+  const firmPath = firmDefaultPathFor(skillId);
+  if (!fs.existsSync(firmPath)) {
+    return null;
+  }
+  return { content: fs.readFileSync(firmPath, "utf8"), source: "firm-default" };
+}
+
+function readVersions(lawyerId, skillId) {
+  const p = versionsPathFor(lawyerId, skillId);
+  if (!fs.existsSync(p)) return [];
+  return JSON.parse(fs.readFileSync(p, "utf8")).versions;
+}
+
+function writeVersions(lawyerId, skillId, versions) {
+  fs.writeFileSync(versionsPathFor(lawyerId, skillId), JSON.stringify({ versions }, null, 2));
+}
+
+function newVersionId() {
+  return `v-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Ensures the lawyer has a personal copy of the Skill, cloning the firm
+ * default (with a baseline version record) on first touch.
+ */
+function ensurePersonalCopy(lawyerId, skillId) {
+  const personalPath = personalPathFor(lawyerId, skillId);
+  if (fs.existsSync(personalPath)) return;
+
+  const firmPath = firmDefaultPathFor(skillId);
+  const content = fs.readFileSync(firmPath, "utf8");
+  fs.mkdirSync(path.dirname(personalPath), { recursive: true });
+  fs.writeFileSync(personalPath, content);
+  writeVersions(lawyerId, skillId, [
+    {
+      versionId: newVersionId(),
+      timestamp: new Date().toISOString(),
+      matterId: null,
+      sourceMessage: null,
+      category: "baseline",
+      diff: null,
+      diffSummary: "Cloned from firm-default Skill",
+      content,
+    },
+  ]);
+}
+
 app.post("/api/run-skill", (req, res) => {
   try {
-    const { skillId, sourceFile, matter, section, uploadedDocuments, message } = req.body;
+    const { skillId, sourceFile, matter, section, uploadedDocuments, message, lawyerId } = req.body;
 
     let skillInstructions = null;
+    let skillSource = null;
     if (skillId || sourceFile) {
       if (!skillId || !sourceFile) {
         return res.status(400).json({ error: "skillId and sourceFile must both be provided if either is." });
       }
-
-      const skillPath = path.join(SKILLS_DIR, sourceFile);
-      if (!skillPath.startsWith(SKILLS_DIR)) {
-        return res.status(400).json({ error: "Invalid sourceFile." });
+      if (!SKILL_ID_RE.test(skillId)) {
+        return res.status(400).json({ error: "Invalid skillId." });
       }
-      if (!fs.existsSync(skillPath)) {
+
+      // A lawyer's coached (personal) copy takes precedence over the firm
+      // default -- that's what makes Skill Coach edits apply "going forward".
+      const loaded = loadSkillMarkdown(lawyerId, skillId);
+      if (!loaded) {
         return res.status(404).json({ error: `Skill file not found: ${sourceFile}` });
       }
-
-      skillInstructions = fs.readFileSync(skillPath, "utf8");
+      skillInstructions = loaded.content;
+      skillSource = loaded.source;
     }
 
     const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -199,14 +287,14 @@ app.post("/api/run-skill", (req, res) => {
     addTrace(
       runId,
       skillInstructions
-        ? `Loaded Skill: ${sourceFile} (${(skillInstructions.length / 1024).toFixed(1)} KB)`
+        ? `Loaded Skill: ${skillId}.md (${(skillInstructions.length / 1024).toFixed(1)} KB, ${skillSource})`
         : "No Skill selected -- message-only run"
     );
     res.json({ runId });
 
     // Fire-and-forget: the response above already went out, so a slow
     // Claude call here can't be aborted by Word's request timeout.
-    executeSkillRun(runId, { skillInstructions, matter, section, uploadedDocuments, message });
+    executeSkillRun(runId, { skillId, skillInstructions, matter, section, uploadedDocuments, message });
   } catch (err) {
     console.error("Suade backend error:", err);
     res.status(500).json({ error: err.message || "Unknown server error." });
@@ -221,7 +309,7 @@ app.get("/api/run-skill/:runId", (req, res) => {
   res.json(run);
 });
 
-async function executeSkillRun(runId, { skillInstructions, matter, section, uploadedDocuments, message }) {
+async function executeSkillRun(runId, { skillId, skillInstructions, matter, section, uploadedDocuments, message }) {
   const startedAt = Date.now();
   try {
     const fileAttachments = (uploadedDocuments || []).filter((d) => d.fileId);
@@ -266,6 +354,19 @@ async function executeSkillRun(runId, { skillInstructions, matter, section, uplo
       run.output = output;
       run.createdAt = Date.now();
     }
+
+    // Minimal Activity Graph record (FR-2.1): which Skill produced which
+    // output for which matter. Skill Coach's classify step builds on this.
+    fs.appendFileSync(
+      SKILL_RUNS_LOG_PATH,
+      `${JSON.stringify({
+        skillRunId: runId,
+        skillId: skillId || null,
+        matterId: matter ? matter.matterId : null,
+        timestamp: new Date().toISOString(),
+        output,
+      })}\n`
+    );
   } catch (err) {
     console.error("Suade backend error:", err);
     const errorMessage = err.message || "Unknown server error.";
@@ -307,6 +408,229 @@ app.post("/api/skill-feedback", (req, res) => {
   } catch (err) {
     console.error("Suade backend feedback error:", err);
     res.status(500).json({ error: err.message || "Unknown error logging feedback." });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Skill Coach: a lawyer's follow-up message after a Skill run can update
+// that Skill going forward (classify -> commit -> undo).
+// ---------------------------------------------------------------------------
+
+function buildCoachClassifyPrompt({ displayName, skillMarkdown, priorOutput, lawyerMessage }) {
+  return [
+    `You are "Skill Coach" inside Suade, a Word add-in for arbitration lawyers. Skills are ` +
+      `markdown playbooks that drive drafting. A lawyer just ran the "${displayName}" Skill, ` +
+      `received the output below, and then sent the follow-up message below.`,
+    `Classify the follow-up into EXACTLY one category:\n` +
+      `- "new_step": adds a new procedural step the Skill's process should include every time\n` +
+      `- "new_checklist_item": adds a concrete item the Skill should check or verify every time\n` +
+      `- "domain_insight": a durable legal/domain fact or rule the Skill should always take into account\n` +
+      `- "best_practice": a drafting/style/formatting practice the Skill should always follow\n` +
+      `- "none": anything else`,
+    `STRICT RULE: choose one of the first four ONLY if a reasonable Skill author would want this ` +
+      `applied to EVERY future matter that uses this Skill -- not just the current matter's facts. ` +
+      `Matter-specific facts or names, one-off questions, requests to clarify/shorten/redo THIS ` +
+      `output, and comments about THIS matter are all "none". When in doubt or ambiguous, choose "none".`,
+    `If (and only if) the category is not "none", also draft the edit:\n` +
+      `- "targetSection": the heading text of the existing section in the Skill file where the ` +
+      `addition belongs, quoted as it appears in the file (e.g. "4. Process" or "Phase 3 -- ...")\n` +
+      `- "insertText": the exact markdown to insert -- concise, imperative, generalized beyond ` +
+      `this matter (no party names unless the guidance is inherently about them)`,
+    `<skill_file>\n${skillMarkdown}\n</skill_file>`,
+    `<prior_skill_output>\n${String(priorOutput || "").slice(0, 6000)}\n</prior_skill_output>`,
+    `<lawyer_follow_up_message>\n${lawyerMessage}\n</lawyer_follow_up_message>`,
+    `Respond with ONLY a JSON object, no other text:\n` +
+      `{"category": "...", "targetSection": string or null, "insertText": string or null}`,
+  ].join("\n\n");
+}
+
+function parseCoachJson(text) {
+  try {
+    const cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    if (start === -1 || end === -1) throw new Error("no JSON object in response");
+    const parsed = JSON.parse(cleaned.slice(start, end + 1));
+    if (!COACH_CATEGORIES.includes(parsed.category)) throw new Error(`bad category: ${parsed.category}`);
+    return {
+      category: parsed.category,
+      targetSection: typeof parsed.targetSection === "string" ? parsed.targetSection : null,
+      insertText: typeof parsed.insertText === "string" ? parsed.insertText : null,
+    };
+  } catch (err) {
+    // Bias toward "none": a malformed classification must never mutate a Skill.
+    console.error("Suade Skill Coach: unparseable classification, treating as none:", err.message);
+    return { category: "none", targetSection: null, insertText: null };
+  }
+}
+
+app.post("/api/skill-coach/classify", async (req, res) => {
+  try {
+    const { matterId, skillId, skillName, priorOutput, lawyerMessage, lawyerId } = req.body;
+
+    if (!skillId || !SKILL_ID_RE.test(skillId)) {
+      return res.status(400).json({ error: "A valid skillId is required." });
+    }
+    if (!lawyerMessage || !String(lawyerMessage).trim()) {
+      return res.status(400).json({ error: "lawyerMessage is required." });
+    }
+
+    const loaded = loadSkillMarkdown(lawyerId, skillId);
+    if (!loaded) {
+      return res.status(404).json({ error: `Skill not found: ${skillId}` });
+    }
+
+    const displayName = skillName || skillId;
+    const prompt = buildCoachClassifyPrompt({
+      displayName,
+      skillMarkdown: loaded.content,
+      priorOutput,
+      lawyerMessage,
+    });
+
+    const response = await anthropic.beta.messages.create({
+      model: MODEL,
+      max_tokens: 2000,
+      thinking: { type: "adaptive" },
+      output_config: { effort: "medium" },
+      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+    });
+
+    const textBlock = response.content.find((b) => b.type === "text");
+    const parsed = parseCoachJson(textBlock ? textBlock.text : "");
+    console.log(
+      `Suade Skill Coach: classified follow-up on ${skillId} (matter ${matterId || "n/a"}) as ${parsed.category}`
+    );
+
+    if (parsed.category === "none" || !parsed.targetSection || !parsed.insertText) {
+      return res.json({ category: "none", skillName: displayName, proposedEdit: null, requiresManualReview: false });
+    }
+
+    // Guardrail: proposed edits into Non-Negotiable Rules / Guardrails
+    // sections are never auto-applied -- surface for manual review instead.
+    if (isProtectedSection(loaded.content, parsed.targetSection)) {
+      return res.json({
+        category: parsed.category,
+        skillName: displayName,
+        proposedEdit: null,
+        requiresManualReview: true,
+        targetSection: parsed.targetSection,
+      });
+    }
+
+    res.json({
+      category: parsed.category,
+      skillName: displayName,
+      proposedEdit: {
+        targetSection: parsed.targetSection,
+        insertText: parsed.insertText,
+        category: parsed.category,
+      },
+      requiresManualReview: false,
+    });
+  } catch (err) {
+    console.error("Suade Skill Coach classify error:", err);
+    res.status(500).json({ error: err.message || "Unknown classification error." });
+  }
+});
+
+app.post("/api/skill-coach/commit", (req, res) => {
+  try {
+    const { lawyerId, skillId, proposedEdit, matterId, sourceMessage } = req.body;
+
+    if (!skillId || !SKILL_ID_RE.test(skillId)) {
+      return res.status(400).json({ error: "A valid skillId is required." });
+    }
+    if (!proposedEdit || !proposedEdit.targetSection || !proposedEdit.insertText) {
+      return res.status(400).json({ error: "proposedEdit with targetSection and insertText is required." });
+    }
+    if (!fs.existsSync(firmDefaultPathFor(skillId))) {
+      return res.status(404).json({ error: `Skill not found: ${skillId}` });
+    }
+
+    ensurePersonalCopy(lawyerId, skillId);
+    const personalPath = personalPathFor(lawyerId, skillId);
+    const prior = fs.readFileSync(personalPath, "utf8");
+
+    // Re-check the guardrail server-side: even a direct/racy commit call
+    // must never write into a protected section.
+    if (isProtectedSection(prior, proposedEdit.targetSection)) {
+      return res.status(409).json({
+        error: "This edit targets a Non-Negotiable Rules / Guardrails section and needs manual review.",
+        requiresManualReview: true,
+        targetSection: proposedEdit.targetSection,
+      });
+    }
+
+    const next = applyEditToMarkdown(prior, proposedEdit.targetSection, proposedEdit.insertText);
+    const { diff, diffSummary } = buildInsertionDiff(prior, proposedEdit.targetSection, proposedEdit.insertText);
+
+    fs.writeFileSync(personalPath, next);
+
+    const versions = readVersions(lawyerId, skillId);
+    const versionId = newVersionId();
+    versions.push({
+      versionId,
+      timestamp: new Date().toISOString(),
+      matterId: matterId || null,
+      sourceMessage: sourceMessage || null,
+      category: proposedEdit.category || null,
+      diff,
+      diffSummary,
+      content: next,
+    });
+    writeVersions(lawyerId, skillId, versions);
+
+    console.log(`Suade Skill Coach: committed ${versionId} to ${skillId} for ${sanitizeLawyerId(lawyerId)} -- ${diffSummary}`);
+    res.json({ newVersionId: versionId, diffSummary });
+  } catch (err) {
+    console.error("Suade Skill Coach commit error:", err);
+    res.status(500).json({ error: err.message || "Unknown commit error." });
+  }
+});
+
+app.post("/api/skill-coach/undo", (req, res) => {
+  try {
+    const { lawyerId, skillId, versionId } = req.body;
+
+    if (!skillId || !SKILL_ID_RE.test(skillId)) {
+      return res.status(400).json({ error: "A valid skillId is required." });
+    }
+    if (!versionId) {
+      return res.status(400).json({ error: "versionId is required." });
+    }
+
+    const versions = readVersions(lawyerId, skillId);
+    const index = versions.findIndex((v) => v.versionId === versionId);
+    if (index === -1) {
+      return res.status(404).json({ error: `Unknown versionId: ${versionId}` });
+    }
+    if (index === 0) {
+      return res.status(400).json({ error: "Cannot undo the baseline version." });
+    }
+
+    const prior = versions[index - 1];
+    fs.writeFileSync(personalPathFor(lawyerId, skillId), prior.content);
+
+    // The reverted version stays in history; the revert is itself a version.
+    versions.push({
+      versionId: newVersionId(),
+      timestamp: new Date().toISOString(),
+      matterId: null,
+      sourceMessage: null,
+      category: "revert",
+      revertOf: versionId,
+      diff: null,
+      diffSummary: `Reverted: ${versions[index].diffSummary || versionId}`,
+      content: prior.content,
+    });
+    writeVersions(lawyerId, skillId, versions);
+
+    console.log(`Suade Skill Coach: reverted ${skillId} to version before ${versionId} for ${sanitizeLawyerId(lawyerId)}`);
+    res.json({ ok: true, revertedToVersionId: prior.versionId });
+  } catch (err) {
+    console.error("Suade Skill Coach undo error:", err);
+    res.status(500).json({ error: err.message || "Unknown undo error." });
   }
 });
 

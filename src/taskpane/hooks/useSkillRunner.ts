@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { MatterRecord, DocumentSection, SkillRecord, UploadedDocumentRecord } from "@/types";
 import { readSectionText } from "../office/documentText";
-import { BACKEND_URL } from "../config";
+import { BACKEND_URL, LAWYER_ID } from "../config";
 
 const POLL_INTERVAL_MS = 3000;
 const POLL_TIMEOUT_MS = 10 * 60 * 1000; // give up after 10 minutes of polling
@@ -66,6 +66,7 @@ export function useSkillRunner() {
             fileId: d.claudeFileReference,
           })),
           message: args.message,
+          lawyerId: LAWYER_ID,
         }),
       });
 

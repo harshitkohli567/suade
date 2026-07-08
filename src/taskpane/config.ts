@@ -6,3 +6,11 @@
  * works and there's no separate domain to hardcode here.
  */
 export const BACKEND_URL = window.location.hostname === "localhost" ? "https://localhost:3001" : "";
+
+/**
+ * Placeholder identity until real auth exists (same caveat as
+ * uploadedBy in useDocumentUploads). Keys the per-lawyer personal Skill
+ * store on the backend, so every user of this build currently shares
+ * one "lawyer" and therefore one set of coached Skills.
+ */
+export const LAWYER_ID = "default-lawyer";

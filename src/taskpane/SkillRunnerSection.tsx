@@ -3,6 +3,7 @@ import { MatterRecord, DocumentSection, DocumentRole, UploadedDocumentRecord } f
 import { SKILL_REGISTRY } from "@/data/skills/registry";
 import { useSkillRunner } from "./hooks/useSkillRunner";
 import { useSkillFeedback } from "./hooks/useSkillFeedback";
+import { useSkillCoach, CATEGORY_LABELS } from "./hooks/useSkillCoach";
 import { DOCUMENT_ROLES, UploadJob } from "./hooks/useDocumentUploads";
 import { insertTextAtSectionEnd } from "./office/insertContent";
 import UploadProgress from "./UploadProgress";
@@ -17,6 +18,14 @@ interface RunMeta {
 
 function formatTraceTime(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour12: false });
+}
+
+/** The Skill run whose output is currently on screen -- what Skill Coach coaches against. */
+interface ActiveSkillContext {
+  skillId: string;
+  skillName: string;
+  matterId: string | null;
+  output: string;
 }
 
 interface SkillRunnerSectionProps {
@@ -49,6 +58,7 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
   const [message, setMessage] = useState("");
   const { run, output, loading, error, trace } = useSkillRunner();
   const feedback = useSkillFeedback();
+  const skillCoach = useSkillCoach();
 
   const [editedOutput, setEditedOutput] = useState("");
   const [insertState, setInsertState] = useState<"idle" | "inserting" | "done" | "error">("idle");
@@ -56,6 +66,7 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
   const [lastRunMeta, setLastRunMeta] = useState<RunMeta | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [traceCollapsed, setTraceCollapsed] = useState(false);
+  const [activeSkillContext, setActiveSkillContext] = useState<ActiveSkillContext | null>(null);
 
   useEffect(() => {
     if (!loading) return;
@@ -73,12 +84,33 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
       setInsertState("idle");
       setInsertError(null);
       feedback.reset();
+      if (lastRunMeta && lastRunMeta.skillId !== "none") {
+        setActiveSkillContext({
+          skillId: lastRunMeta.skillId,
+          skillName: lastRunMeta.skillName,
+          matterId: lastRunMeta.matterId,
+          output,
+        });
+      }
     }
   }, [output]);
 
   const selectedSkill = SKILL_REGISTRY.find((s) => s.skillId === selectedSkillId) ?? null;
 
   const handleRun = () => {
+    // Skill Coach: classify the follow-up against the PRIOR Skill output,
+    // in parallel -- never delays or blocks the message's own run.
+    const trimmedMessage = message.trim();
+    if (activeSkillContext && trimmedMessage) {
+      void skillCoach.coach({
+        skillId: activeSkillContext.skillId,
+        skillName: activeSkillContext.skillName,
+        matterId: matter ? matter.matterId : activeSkillContext.matterId,
+        priorOutput: activeSkillContext.output,
+        lawyerMessage: trimmedMessage,
+      });
+    }
+
     setLastRunMeta({
       skillId: selectedSkill ? selectedSkill.skillId : "none",
       skillName: selectedSkill ? selectedSkill.displayName : "No Skill (message only)",
@@ -242,6 +274,60 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
         )}
       </div>
 
+      {skillCoach.state.phase === "countdown" && (
+        <div style={styles.coachIndicator}>
+          <span style={styles.coachIndicatorText}>
+            Coaching the {skillCoach.state.skillName} Skill — {CATEGORY_LABELS[skillCoach.state.category]} …
+          </span>
+          <button style={styles.coachStopButton} onClick={skillCoach.stop}>
+            Stop
+          </button>
+        </div>
+      )}
+
+      {skillCoach.state.phase === "manual-review" && (
+        <div style={styles.coachManualReview}>
+          <span style={styles.coachManualReviewText}>
+            {skillCoach.state.skillName} Skill — this touches a core rule and needs manual review
+          </span>
+          <button style={styles.coachDismissButton} onClick={skillCoach.dismiss}>
+            ✕
+          </button>
+        </div>
+      )}
+
+      {skillCoach.state.phase === "committed" && (
+        <div style={styles.coachToast}>
+          <span style={styles.coachToastText}>
+            Updated the {skillCoach.state.skillName} Skill — {skillCoach.state.diffSummary}
+          </span>
+          <button style={styles.coachUndoButton} onClick={() => void skillCoach.undo()}>
+            Undo
+          </button>
+          <button style={styles.coachDismissButton} onClick={skillCoach.dismiss}>
+            ✕
+          </button>
+        </div>
+      )}
+
+      {skillCoach.state.phase === "reverted" && (
+        <div style={styles.coachToast}>
+          <span style={styles.coachToastText}>Reverted the {skillCoach.state.skillName} Skill update.</span>
+          <button style={styles.coachDismissButton} onClick={skillCoach.dismiss}>
+            ✕
+          </button>
+        </div>
+      )}
+
+      {skillCoach.state.phase === "error" && (
+        <div style={styles.coachManualReview}>
+          <span style={styles.coachManualReviewText}>Skill Coach: {skillCoach.state.message}</span>
+          <button style={styles.coachDismissButton} onClick={skillCoach.dismiss}>
+            ✕
+          </button>
+        </div>
+      )}
+
       {trace.length > 0 && (
         <div style={styles.tracePanel}>
           <div style={styles.traceHeader}>
@@ -387,6 +473,71 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: "8px",
   },
   runRow: { display: "flex", alignItems: "center", gap: "10px", marginTop: "4px" },
+  coachIndicator: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    marginTop: "8px",
+    padding: "6px 10px",
+    fontSize: "12px",
+    background: "#EFF4FA",
+    border: "1px solid #C5D5E8",
+    borderRadius: "4px",
+  },
+  coachIndicatorText: { color: "#1F3A5F", flex: 1 },
+  coachStopButton: {
+    fontSize: "11px",
+    padding: "2px 10px",
+    cursor: "pointer",
+    border: "1px solid #1F3A5F",
+    borderRadius: "3px",
+    background: "#fff",
+    color: "#1F3A5F",
+    flexShrink: 0,
+  },
+  coachManualReview: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    marginTop: "8px",
+    padding: "6px 10px",
+    fontSize: "12px",
+    background: "#FFF8E6",
+    border: "1px solid #E0C878",
+    borderRadius: "4px",
+  },
+  coachManualReviewText: { color: "#7A5C00", flex: 1, lineHeight: 1.4 },
+  coachToast: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    marginTop: "8px",
+    padding: "6px 10px",
+    fontSize: "12px",
+    background: "#EAF1E8",
+    border: "1px solid #B9D3B4",
+    borderRadius: "4px",
+  },
+  coachToastText: { color: "#2C5530", flex: 1, lineHeight: 1.4 },
+  coachUndoButton: {
+    fontSize: "11px",
+    padding: "2px 10px",
+    cursor: "pointer",
+    border: "1px solid #2C5530",
+    borderRadius: "3px",
+    background: "#fff",
+    color: "#2C5530",
+    flexShrink: 0,
+  },
+  coachDismissButton: {
+    fontSize: "11px",
+    padding: "2px 6px",
+    cursor: "pointer",
+    border: "none",
+    background: "transparent",
+    color: "#5B6470",
+    flexShrink: 0,
+  },
   tracePanel: {
     marginTop: "10px",
     fontSize: "11px",
