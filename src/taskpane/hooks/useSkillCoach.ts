@@ -15,7 +15,7 @@ import { BACKEND_URL, LAWYER_ID } from "../config";
  * committing.
  */
 
-const COMMIT_GRACE_MS = 5000;
+const COMMIT_GRACE_MS = 10000;
 
 export type CoachCategory = "new_step" | "new_checklist_item" | "domain_insight" | "best_practice";
 
