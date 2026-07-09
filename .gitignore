@@ -5,3 +5,4 @@ dist/
 .env
 .env.local
 skills/personal/
+matters-extra.json

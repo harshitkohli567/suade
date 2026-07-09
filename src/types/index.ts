@@ -34,6 +34,7 @@ export type DocumentRole =
   | "expert_report"
   | "exhibit"
   | "corporate_registry" // registry/incorporation extracts -- description-of-parties needs these specifically, distinct from a generic exhibit
+  | "client_communication" // meeting transcript / client email -- the matter-intake flow's primary input
   | "other";
 
 export interface UploadedDocumentRecord {
@@ -42,7 +43,7 @@ export interface UploadedDocumentRecord {
   /** Opaque reference returned by Claude's native file-upload capability. Suade never stores file content itself (FR-10.2). */
   claudeFileReference: string;
   filename: string;
-  fileType: "pdf" | "docx";
+  fileType: "pdf" | "docx" | "msg";
   documentRole: DocumentRole;
   uploadedBy: string;
   uploadedAt: string; // ISO 8601

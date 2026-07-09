@@ -2,20 +2,46 @@ import React, { useState } from "react";
 import { useDocumentContext } from "./hooks/useDocumentContext";
 import { useSectionDebug } from "./hooks/useSectionDebug";
 import { useMatterDetection } from "./hooks/useMatterDetection";
+import { useMatterIntake } from "./hooks/useMatterIntake";
 import { resolveAutoMatch } from "@/data/matters/matterMatching";
-import { useDocumentUploads } from "./hooks/useDocumentUploads";
+import { useDocumentUploads, UNASSIGNED_MATTER_ID } from "./hooks/useDocumentUploads";
 import SkillRunnerSection from "./SkillRunnerSection";
 import BackendStatus from "./BackendStatus";
+import UploadProgress from "./UploadProgress";
 
 const App: React.FC = () => {
   const { context, error } = useDocumentContext();
   const debug = useSectionDebug();
   const matterDetection = useMatterDetection();
+  const intake = useMatterIntake();
   const documentUploads = useDocumentUploads();
   const boldSignals = debug.signals.filter((s) => s.bold);
   const resolvedMatch = resolveAutoMatch(matterDetection.results);
   const [matterCardCollapsed, setMatterCardCollapsed] = useState(false);
   const [diagnosticsCollapsed, setDiagnosticsCollapsed] = useState(false);
+  const [intakeInstruction, setIntakeInstruction] = useState("");
+
+  // A matter established via blank-document intake takes precedence;
+  // otherwise fall back to document-text detection.
+  const resolvedMatter = intake.result ? intake.result.matter : resolvedMatch ? resolvedMatch.matter : null;
+  const matterNote = intake.result ? intake.result.note : resolvedMatch ? resolvedMatch.reason : null;
+
+  const intakeDocs = documentUploads.documentsForMatter(UNASSIGNED_MATTER_ID);
+
+  const handleIntakeFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const files = Array.from(e.target.files);
+    e.target.value = "";
+    await documentUploads.uploadDocuments(files, UNASSIGNED_MATTER_ID, "client_communication");
+  };
+
+  const handleStartMatter = async () => {
+    const result = await intake.run(intakeInstruction, intakeDocs);
+    if (result) {
+      // Intake materials become the new matter's documents, so Skills can use them.
+      documentUploads.reassignDocuments(UNASSIGNED_MATTER_ID, result.matter.matterId);
+    }
+  };
 
   return (
     <div style={styles.container}>
@@ -65,11 +91,11 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {resolvedMatch && (
+      {resolvedMatter && (
         <div style={styles.matterCard}>
           <div style={styles.matterCardHeader}>
             <p style={styles.matterCardTitle}>
-              {matterCardCollapsed ? resolvedMatch.matter.matterId : "Resolved Matter"}
+              {matterCardCollapsed ? resolvedMatter.matterId : "Resolved Matter"}
             </p>
             <button
               style={styles.collapseButton}
@@ -82,38 +108,97 @@ const App: React.FC = () => {
           {!matterCardCollapsed && (
             <dl style={styles.fieldList}>
               <dt style={styles.fieldLabel}>Matter ID</dt>
-              <dd style={styles.fieldValue}>{resolvedMatch.matter.matterId}</dd>
+              <dd style={styles.fieldValue}>{resolvedMatter.matterId}</dd>
               <dt style={styles.fieldLabel}>Client</dt>
-              <dd style={styles.fieldValue}>{resolvedMatch.matter.client}</dd>
+              <dd style={styles.fieldValue}>{resolvedMatter.client}</dd>
               <dt style={styles.fieldLabel}>Represented side</dt>
-              <dd style={styles.fieldValue}>{resolvedMatch.matter.representedSide}</dd>
+              <dd style={styles.fieldValue}>{resolvedMatter.representedSide}</dd>
               <dt style={styles.fieldLabel}>Counterparty</dt>
-              <dd style={styles.fieldValue}>{resolvedMatch.matter.counterparty}</dd>
+              <dd style={styles.fieldValue}>{resolvedMatter.counterparty}</dd>
               <dt style={styles.fieldLabel}>Matter type</dt>
-              <dd style={styles.fieldValue}>{resolvedMatch.matter.matterType}</dd>
+              <dd style={styles.fieldValue}>{resolvedMatter.matterType}</dd>
               <dt style={styles.fieldLabel}>Governing law</dt>
-              <dd style={styles.fieldValue}>{resolvedMatch.matter.governingLaw}</dd>
+              <dd style={styles.fieldValue}>{resolvedMatter.governingLaw}</dd>
               <dt style={styles.fieldLabel}>Institution / seat</dt>
-              <dd style={styles.fieldValue}>{resolvedMatch.matter.institutionSeat}</dd>
+              <dd style={styles.fieldValue}>{resolvedMatter.institutionSeat}</dd>
               <dt style={styles.fieldLabel}>Responsible team</dt>
-              <dd style={styles.fieldValue}>{resolvedMatch.matter.responsibleLawyerTeam}</dd>
+              <dd style={styles.fieldValue}>{resolvedMatter.responsibleLawyerTeam}</dd>
             </dl>
           )}
 
-          {!matterCardCollapsed && <p style={styles.matchReason}>{resolvedMatch.reason}</p>}
+          {!matterCardCollapsed && matterNote && <p style={styles.matchReason}>{matterNote}</p>}
+
+          {!matterCardCollapsed && intake.result && intake.result.gaps.length > 0 && (
+            <ul style={styles.gapList}>
+              {intake.result.gaps.map((gap, i) => (
+                <li key={i}>{gap}</li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
-      {!resolvedMatch && matterDetection.hasRun && (
+      {!resolvedMatter && matterDetection.hasRun && (
         <p style={styles.body}>No matter detected in this document.</p>
+      )}
+
+      {!resolvedMatter && (
+        <div style={styles.intakeBlock}>
+          <p style={styles.fieldLabel}>Or start from a blank document</p>
+          <p style={styles.helperText}>
+            Describe the matter in your own words and attach the client meeting transcript or an
+            email from the client (PDF, DOCX, or Outlook .msg). Suade will pull out the matter
+            details -- or recognise the matter if it already exists in the repository -- so you can
+            start drafting.
+          </p>
+
+          <textarea
+            style={styles.intakeTextarea}
+            value={intakeInstruction}
+            onChange={(e) => setIntakeInstruction(e.target.value)}
+            placeholder="e.g. New matter -- we act for the client in the attached meeting notes. Prepare to draft a Statement of Claim."
+            rows={3}
+          />
+
+          <input
+            type="file"
+            accept=".pdf,.docx,.msg"
+            multiple
+            onChange={handleIntakeFiles}
+            style={styles.intakeFileInput}
+            disabled={documentUploads.uploading || intake.loading}
+          />
+
+          <UploadProgress jobs={documentUploads.uploadJobs} />
+
+          {intakeDocs.length > 0 && (
+            <p style={styles.helperText}>
+              Attached: {intakeDocs.map((d) => d.filename).join(", ")}
+            </p>
+          )}
+
+          <button
+            style={styles.debugButton}
+            onClick={handleStartMatter}
+            disabled={intake.loading || documentUploads.uploading || (!intakeInstruction.trim() && intakeDocs.length === 0)}
+          >
+            {intake.loading ? "Reading materials…" : "Start Matter"}
+          </button>
+
+          {intake.error && (
+            <div style={styles.errorBox}>
+              <strong>Intake error:</strong> {intake.error}
+            </div>
+          )}
+        </div>
       )}
 
       <hr style={styles.divider} />
 
       <SkillRunnerSection
-        matter={resolvedMatch ? resolvedMatch.matter : null}
+        matter={resolvedMatter}
         activeSection={context ? context.activeSection : null}
-        uploadedDocuments={resolvedMatch ? documentUploads.documentsForMatter(resolvedMatch.matter.matterId) : []}
+        uploadedDocuments={resolvedMatter ? documentUploads.documentsForMatter(resolvedMatter.matterId) : []}
         uploadDocuments={documentUploads.uploadDocuments}
         uploading={documentUploads.uploading}
         uploadError={documentUploads.uploadError}
@@ -223,6 +308,26 @@ const styles: Record<string, React.CSSProperties> = {
   },
   matterCardTitle: { fontWeight: 700, margin: 0, color: "#2C5530" },
   matchReason: { fontSize: "11px", fontStyle: "italic", color: "#2C5530", margin: "8px 0 0 0", lineHeight: 1.5 },
+  gapList: {
+    fontSize: "11px",
+    color: "#7A5C00",
+    margin: "6px 0 0 0",
+    paddingLeft: "16px",
+    lineHeight: 1.5,
+  },
+  intakeBlock: { marginTop: "14px" },
+  intakeTextarea: {
+    width: "100%",
+    fontSize: "12px",
+    fontFamily: "Segoe UI, sans-serif",
+    padding: "8px",
+    border: "1px solid #DDE3EA",
+    borderRadius: "4px",
+    boxSizing: "border-box",
+    resize: "vertical",
+    marginBottom: "8px",
+  },
+  intakeFileInput: { fontSize: "12px", marginBottom: "6px" },
   matterCardHeader: { display: "flex", justifyContent: "space-between", alignItems: "center" },
   collapseButton: {
     fontSize: "11px",

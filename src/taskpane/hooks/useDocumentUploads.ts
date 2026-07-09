@@ -26,8 +26,16 @@ export const DOCUMENT_ROLES: DocumentRole[] = [
   "expert_report",
   "exhibit",
   "corporate_registry",
+  "client_communication",
   "other",
 ];
+
+/**
+ * Documents uploaded during matter intake, before any matter exists, are
+ * parked under this pseudo-matter and reassigned to the real matter once
+ * intake resolves one.
+ */
+export const UNASSIGNED_MATTER_ID = "unassigned";
 
 export type UploadJobStatus = "queued" | "uploading" | "done" | "error";
 
@@ -38,14 +46,18 @@ export interface UploadJob {
   error?: string;
 }
 
-function inferFileType(filename: string): "pdf" | "docx" {
-  return filename.toLowerCase().endsWith(".docx") ? "docx" : "pdf";
+function inferFileType(filename: string): "pdf" | "docx" | "msg" {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".docx")) return "docx";
+  if (lower.endsWith(".msg")) return "msg";
+  return "pdf";
 }
 
 function inferMimeType(filename: string): string {
-  return filename.toLowerCase().endsWith(".docx")
-    ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    : "application/pdf";
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (lower.endsWith(".msg")) return "application/vnd.ms-outlook";
+  return "application/pdf";
 }
 
 function fileToBase64(file: File): Promise<string> {
@@ -185,10 +197,16 @@ export function useDocumentUploads() {
   const documentsForMatter = (matterId: string): UploadedDocumentRecord[] =>
     documents.filter((d) => d.matterId === matterId);
 
+  /** Moves docs parked under one matter id (e.g. "unassigned") to another once intake resolves the real matter. */
+  const reassignDocuments = (fromMatterId: string, toMatterId: string) => {
+    setDocuments((prev) => prev.map((d) => (d.matterId === fromMatterId ? { ...d, matterId: toMatterId } : d)));
+  };
+
   return {
     uploadDocuments,
     removeDocument,
     documentsForMatter,
+    reassignDocuments,
     uploading,
     uploadError,
     uploadJobs,

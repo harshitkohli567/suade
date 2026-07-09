@@ -9,12 +9,20 @@ const Anthropic = require("@anthropic-ai/sdk");
 const { toFile } = require("@anthropic-ai/sdk");
 const devCerts = require("office-addin-dev-certs");
 const mammoth = require("mammoth");
+const MsgReader = require("@kenjiuno/msgreader").default;
 const {
   sanitizeLawyerId,
   isProtectedSection,
   applyEditToMarkdown,
   buildInsertionDiff,
 } = require("./skillCoachUtils");
+const {
+  loadRepositoryMatters,
+  readExtraMatters,
+  appendExtraMatter,
+  findRepoMatchByParties,
+  nextIntakeMatterId,
+} = require("./serverMatters");
 
 /**
  * Suade backend (Step 7, extended Step 9). Holds the Anthropic API key
@@ -120,6 +128,53 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 const DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const MSG_MIME_TYPE = "application/vnd.ms-outlook";
+
+/**
+ * Outlook .msg -> plaintext. Same reasoning as the DOCX path: Anthropic's
+ * document blocks only accept PDF and plaintext, so the email's fields and
+ * body are extracted into a text rendering. Attachments inside the email
+ * are listed by name but NOT extracted -- flagged in the output so Claude
+ * never assumes it saw them.
+ */
+function msgToPlaintext(buffer) {
+  const data = new MsgReader(buffer).getFileData();
+  if (!data || data.error) {
+    throw new Error(data && data.error ? data.error : "Could not parse .msg file.");
+  }
+
+  const bodyText =
+    data.body ||
+    (data.bodyHtml ? String(data.bodyHtml).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim() : "");
+
+  const recipients = (data.recipients || [])
+    .map((r) => {
+      const name = r.name || "";
+      const email = r.smtpAddress || r.email || "";
+      return name && email ? `${name} <${email}>` : name || email;
+    })
+    .filter(Boolean);
+
+  const lines = [];
+  const sender = [data.senderName, data.senderEmail ? `<${data.senderEmail}>` : ""].filter(Boolean).join(" ");
+  lines.push(`From: ${sender || "(unknown sender)"}`);
+  if (recipients.length > 0) lines.push(`To: ${recipients.join("; ")}`);
+  if (data.messageDeliveryTime) lines.push(`Date: ${data.messageDeliveryTime}`);
+  lines.push(`Subject: ${data.subject || "(no subject)"}`);
+  lines.push("");
+  lines.push(bodyText || "(no message body found)");
+
+  const attachmentNames = (data.attachments || []).map((a) => a.fileName).filter(Boolean);
+  if (attachmentNames.length > 0) {
+    lines.push("");
+    lines.push(
+      `[This email had ${attachmentNames.length} attachment(s): ${attachmentNames.join(", ")} -- ` +
+        `attachment contents are NOT included here.]`
+    );
+  }
+
+  return lines.join("\n");
+}
 
 app.post("/api/upload-document", async (req, res) => {
   try {
@@ -151,6 +206,19 @@ app.post("/api/upload-document", async (req, res) => {
         });
       }
       uploadBuffer = Buffer.from(extractedText, "utf8");
+      uploadFilename = `${filename}.txt`;
+      uploadMimeType = "text/plain";
+    } else if (mimeType === MSG_MIME_TYPE || filename.toLowerCase().endsWith(".msg")) {
+      let emailText;
+      try {
+        emailText = msgToPlaintext(buffer);
+      } catch (extractErr) {
+        console.error("Suade backend MSG extraction error:", extractErr);
+        return res.status(422).json({
+          error: `Couldn't read ${filename} as an Outlook .msg file -- it may be corrupted or not a real .msg.`,
+        });
+      }
+      uploadBuffer = Buffer.from(emailText, "utf8");
       uploadFilename = `${filename}.txt`;
       uploadMimeType = "text/plain";
     }
@@ -408,6 +476,127 @@ app.post("/api/skill-feedback", (req, res) => {
   } catch (err) {
     console.error("Suade backend feedback error:", err);
     res.status(500).json({ error: err.message || "Unknown error logging feedback." });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Matter intake: starting from a blank document, an initial instruction +
+// client materials (transcript, email) establish the matter -- matched
+// against the repository when the parties already exist there, otherwise
+// extracted into a new matter persisted in matters-extra.json.
+// ---------------------------------------------------------------------------
+
+app.get("/api/matters-extra", (req, res) => {
+  try {
+    res.json({ matters: readExtraMatters() });
+  } catch (err) {
+    console.error("Suade matters-extra error:", err);
+    res.status(500).json({ error: err.message || "Unknown error reading extra matters." });
+  }
+});
+
+function buildIntakePrompt(instruction) {
+  return [
+    `You are the matter-intake assistant in Suade, a Word add-in for arbitration lawyers. A ` +
+      `lawyer is starting a new document from a blank page. They have given the initial ` +
+      `instruction below, and may have attached client materials (a meeting transcript, an email ` +
+      `from the client) as documents.`,
+    `Extract the matter details. The CLIENT is the party this lawyer represents -- infer the ` +
+      `perspective from the instruction and materials (e.g. the client is usually the email's ` +
+      `sender or the party whose team wrote the meeting notes).`,
+    `<lawyer_instruction>\n${instruction || "(none given -- rely on the attached materials)"}\n</lawyer_instruction>`,
+    `Rules:\n` +
+      `- Use party names exactly as written in the materials.\n` +
+      `- Do NOT invent details that are not stated -- return null for that field and explain what's missing in "gaps".\n` +
+      `- representedSide is the client's role in the dispute: "Claimant", "Respondent", or "Other" if unclear.\n` +
+      `- Keep matterType short, e.g. "Commercial arbitration -- breach of supply agreement".`,
+    `Respond with ONLY a JSON object, no other text:\n` +
+      `{"client": string|null, "representedSide": "Claimant"|"Respondent"|"Other"|null, ` +
+      `"counterparty": string|null, "matterType": string|null, "governingLaw": string|null, ` +
+      `"institutionSeat": string|null, "gaps": string[]}`,
+  ].join("\n\n");
+}
+
+app.post("/api/matter-intake", async (req, res) => {
+  try {
+    const { instruction, uploadedDocuments } = req.body;
+    const fileAttachments = (uploadedDocuments || []).filter((d) => d.fileId);
+
+    if ((!instruction || !String(instruction).trim()) && fileAttachments.length === 0) {
+      return res.status(400).json({ error: "Provide an instruction, an uploaded document, or both." });
+    }
+
+    const content = [{ type: "text", text: buildIntakePrompt(instruction) }];
+    for (const doc of fileAttachments) {
+      content.push({ type: "document", source: { type: "file", file_id: doc.fileId } });
+    }
+
+    const response = await anthropic.beta.messages.create({
+      model: MODEL,
+      max_tokens: 1500,
+      betas: [FILES_API_BETA],
+      thinking: { type: "adaptive" },
+      output_config: { effort: "medium" },
+      messages: [{ role: "user", content }],
+    });
+
+    const textBlock = response.content.find((b) => b.type === "text");
+    let extracted;
+    try {
+      const raw = (textBlock ? textBlock.text : "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+      extracted = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
+    } catch (parseErr) {
+      console.error("Suade matter intake: unparseable extraction:", parseErr.message);
+      return res.status(422).json({ error: "Could not extract matter details from the materials provided." });
+    }
+
+    if (!extracted.client && !extracted.counterparty) {
+      return res.status(422).json({
+        error: "Could not identify the parties from the instruction/materials -- add more detail and try again.",
+        gaps: Array.isArray(extracted.gaps) ? extracted.gaps : [],
+      });
+    }
+
+    // Prefer an existing matter when both parties unambiguously match one.
+    const allKnown = [...loadRepositoryMatters(), ...readExtraMatters()];
+    const repoMatch =
+      extracted.client && extracted.counterparty
+        ? findRepoMatchByParties(extracted.client, extracted.counterparty, allKnown)
+        : null;
+
+    if (repoMatch) {
+      console.log(`Suade matter intake: matched existing matter ${repoMatch.matterId}`);
+      return res.json({
+        matter: repoMatch,
+        source: "repository",
+        note: `Matched existing matter ${repoMatch.matterId} from the parties named in your materials.`,
+        gaps: [],
+      });
+    }
+
+    const validSides = ["Claimant", "Respondent", "Other"];
+    const matter = {
+      matterId: nextIntakeMatterId(),
+      client: extracted.client || "(not stated)",
+      representedSide: validSides.includes(extracted.representedSide) ? extracted.representedSide : "Other",
+      counterparty: extracted.counterparty || "(not stated)",
+      matterType: extracted.matterType || "(not stated)",
+      governingLaw: extracted.governingLaw || "(not stated)",
+      institutionSeat: extracted.institutionSeat || "(not stated)",
+      responsibleLawyerTeam: "Unassigned",
+    };
+    appendExtraMatter(matter);
+
+    console.log(`Suade matter intake: created new matter ${matter.matterId} (${matter.client} v ${matter.counterparty})`);
+    res.json({
+      matter,
+      source: "extracted",
+      note: `New matter ${matter.matterId} created from your intake materials.`,
+      gaps: Array.isArray(extracted.gaps) ? extracted.gaps : [],
+    });
+  } catch (err) {
+    console.error("Suade matter intake error:", err);
+    res.status(500).json({ error: err.message || "Unknown intake error." });
   }
 });
 

@@ -28,7 +28,9 @@ export function useMatterDetection() {
   const run = () => {
     setState((prev) => ({ ...prev, loading: true, error: null }));
 
-    Promise.all([loadMatterRepository(), readFullDocumentText()])
+    // Force-reload so matters created via intake during this session are
+    // visible to detection immediately, not just after a pane reload.
+    Promise.all([loadMatterRepository(true), readFullDocumentText()])
       .then(([matters, documentText]) => {
         const results = findMatterMatches(documentText, matters);
         setState({ results, loading: false, error: null, hasRun: true });
