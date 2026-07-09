@@ -153,6 +153,116 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
     setInsertError(null);
   };
 
+  // Message composer + run button + everything that reports on a run
+  // (spinner, Skill Coach, trace, errors). Rendered in one of two places:
+  // below the assistant's output once there is one (chat-like flow), or in
+  // the pre-output position before the first run / while a run is clearing
+  // the previous output.
+  const composer = (
+    <>
+      <p style={styles.fieldLabel}>Message to Claude</p>
+      <textarea
+        style={styles.messageTextarea}
+        value={message}
+        onChange={(e) => setMessage(e.target.value)}
+        placeholder="e.g. Emphasise the passing-of-risk date and cross-reference Clause 11.2 directly."
+        rows={4}
+      />
+
+      <div style={styles.runRow}>
+        <button style={styles.runButton} onClick={handleRun} disabled={loading}>
+          Enter
+        </button>
+        {loading && (
+          <div style={styles.runningIndicator}>
+            <span style={styles.spinner} />
+            <span style={styles.runningText}>Running… {elapsedSeconds}s elapsed</span>
+          </div>
+        )}
+      </div>
+
+      {skillCoach.state.phase === "countdown" && (
+        <div style={styles.coachIndicator}>
+          <span style={styles.coachIndicatorText}>
+            Coaching the {skillCoach.state.skillName} Skill — {CATEGORY_LABELS[skillCoach.state.category]} …
+          </span>
+          <button style={styles.coachStopButton} onClick={skillCoach.stop}>
+            Stop
+          </button>
+        </div>
+      )}
+
+      {skillCoach.state.phase === "manual-review" && (
+        <div style={styles.coachManualReview}>
+          <span style={styles.coachManualReviewText}>
+            {skillCoach.state.skillName} Skill — this touches a core rule and needs manual review
+          </span>
+          <button style={styles.coachDismissButton} onClick={skillCoach.dismiss}>
+            ✕
+          </button>
+        </div>
+      )}
+
+      {skillCoach.state.phase === "committed" && (
+        <div style={styles.coachToast}>
+          <span style={styles.coachToastText}>
+            Updated the {skillCoach.state.skillName} Skill — {skillCoach.state.diffSummary}
+          </span>
+          <button style={styles.coachUndoButton} onClick={() => void skillCoach.undo()}>
+            Undo
+          </button>
+          <button style={styles.coachDismissButton} onClick={skillCoach.dismiss}>
+            ✕
+          </button>
+        </div>
+      )}
+
+      {skillCoach.state.phase === "reverted" && (
+        <div style={styles.coachToast}>
+          <span style={styles.coachToastText}>Reverted the {skillCoach.state.skillName} Skill update.</span>
+          <button style={styles.coachDismissButton} onClick={skillCoach.dismiss}>
+            ✕
+          </button>
+        </div>
+      )}
+
+      {skillCoach.state.phase === "error" && (
+        <div style={styles.coachManualReview}>
+          <span style={styles.coachManualReviewText}>Skill Coach: {skillCoach.state.message}</span>
+          <button style={styles.coachDismissButton} onClick={skillCoach.dismiss}>
+            ✕
+          </button>
+        </div>
+      )}
+
+      {trace.length > 0 && (
+        <div style={styles.tracePanel}>
+          <div style={styles.traceHeader}>
+            <p style={styles.traceTitle}>Backend activity</p>
+            <button style={styles.traceCollapseButton} onClick={() => setTraceCollapsed((p) => !p)}>
+              {traceCollapsed ? "Show" : "Hide"}
+            </button>
+          </div>
+          {!traceCollapsed && (
+            <ul style={styles.traceList}>
+              {trace.map((entry, i) => (
+                <li key={i}>
+                  <span style={styles.traceTime}>{formatTraceTime(entry.at)}</span> {entry.message}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {error && (
+        <div style={styles.errorBox}>
+          <strong>Error:</strong> {error}
+        </div>
+      )}
+    </>
+  );
+
   return (
     <div>
       <p style={styles.fieldLabel}>Run a Skill</p>
@@ -252,107 +362,9 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
         </ul>
       )}
 
-      <p style={styles.fieldLabel}>Message to Claude</p>
-      <textarea
-        style={styles.messageTextarea}
-        value={message}
-        onChange={(e) => setMessage(e.target.value)}
-        placeholder="e.g. Emphasise the passing-of-risk date and cross-reference Clause 11.2 directly."
-        rows={4}
-      />
-
       <style>{"@keyframes suade-spin { to { transform: rotate(360deg); } }"}</style>
-      <div style={styles.runRow}>
-        <button style={styles.runButton} onClick={handleRun} disabled={loading}>
-          Enter
-        </button>
-        {loading && (
-          <div style={styles.runningIndicator}>
-            <span style={styles.spinner} />
-            <span style={styles.runningText}>Running… {elapsedSeconds}s elapsed</span>
-          </div>
-        )}
-      </div>
 
-      {skillCoach.state.phase === "countdown" && (
-        <div style={styles.coachIndicator}>
-          <span style={styles.coachIndicatorText}>
-            Coaching the {skillCoach.state.skillName} Skill — {CATEGORY_LABELS[skillCoach.state.category]} …
-          </span>
-          <button style={styles.coachStopButton} onClick={skillCoach.stop}>
-            Stop
-          </button>
-        </div>
-      )}
-
-      {skillCoach.state.phase === "manual-review" && (
-        <div style={styles.coachManualReview}>
-          <span style={styles.coachManualReviewText}>
-            {skillCoach.state.skillName} Skill — this touches a core rule and needs manual review
-          </span>
-          <button style={styles.coachDismissButton} onClick={skillCoach.dismiss}>
-            ✕
-          </button>
-        </div>
-      )}
-
-      {skillCoach.state.phase === "committed" && (
-        <div style={styles.coachToast}>
-          <span style={styles.coachToastText}>
-            Updated the {skillCoach.state.skillName} Skill — {skillCoach.state.diffSummary}
-          </span>
-          <button style={styles.coachUndoButton} onClick={() => void skillCoach.undo()}>
-            Undo
-          </button>
-          <button style={styles.coachDismissButton} onClick={skillCoach.dismiss}>
-            ✕
-          </button>
-        </div>
-      )}
-
-      {skillCoach.state.phase === "reverted" && (
-        <div style={styles.coachToast}>
-          <span style={styles.coachToastText}>Reverted the {skillCoach.state.skillName} Skill update.</span>
-          <button style={styles.coachDismissButton} onClick={skillCoach.dismiss}>
-            ✕
-          </button>
-        </div>
-      )}
-
-      {skillCoach.state.phase === "error" && (
-        <div style={styles.coachManualReview}>
-          <span style={styles.coachManualReviewText}>Skill Coach: {skillCoach.state.message}</span>
-          <button style={styles.coachDismissButton} onClick={skillCoach.dismiss}>
-            ✕
-          </button>
-        </div>
-      )}
-
-      {trace.length > 0 && (
-        <div style={styles.tracePanel}>
-          <div style={styles.traceHeader}>
-            <p style={styles.traceTitle}>Backend activity</p>
-            <button style={styles.traceCollapseButton} onClick={() => setTraceCollapsed((p) => !p)}>
-              {traceCollapsed ? "Show" : "Hide"}
-            </button>
-          </div>
-          {!traceCollapsed && (
-            <ul style={styles.traceList}>
-              {trace.map((entry, i) => (
-                <li key={i}>
-                  <span style={styles.traceTime}>{formatTraceTime(entry.at)}</span> {entry.message}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-
-      {error && (
-        <div style={styles.errorBox}>
-          <strong>Error:</strong> {error}
-        </div>
-      )}
+      {output === null && composer}
 
       {output !== null && (
         <div style={styles.outputBox}>
@@ -367,6 +379,8 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
             onChange={(e) => setEditedOutput(e.target.value)}
             rows={14}
           />
+
+          {composer}
 
           {lastRunMeta && (
             <div style={styles.feedbackRow}>
