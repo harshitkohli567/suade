@@ -260,8 +260,60 @@ app.delete("/api/upload-document/:fileId", async (req, res) => {
 // Skill store helpers (firm defaults + per-lawyer personal copies)
 // ---------------------------------------------------------------------------
 
-function firmDefaultPathFor(skillId) {
-  return path.join(SKILLS_DIR, `${skillId}.md`);
+/**
+ * Skills now live one folder per skill (e.g. source/Breach/breach.md),
+ * optionally with a references/ subfolder of supporting files -- the
+ * Agent Skills layout. Resolution is by filename ({skillId}.md) anywhere
+ * under SKILLS_DIR, so the folder names themselves don't matter and the
+ * old flat layout keeps working too.
+ */
+function resolveFirmSkillFile(skillId) {
+  const direct = path.join(SKILLS_DIR, `${skillId}.md`);
+  if (fs.existsSync(direct)) return { filePath: direct, dir: SKILLS_DIR };
+
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        const found = walk(full);
+        if (found) return found;
+      } else if (entry.isFile() && entry.name === `${skillId}.md`) {
+        return { filePath: full, dir };
+      }
+    }
+    return null;
+  };
+  return walk(SKILLS_DIR);
+}
+
+/** The skill folder's references/*.md files, if it has any. */
+function loadSkillReferences(skillDir) {
+  const refDir = path.join(skillDir, "references");
+  if (!fs.existsSync(refDir)) return [];
+  return fs
+    .readdirSync(refDir)
+    .filter((f) => f.toLowerCase().endsWith(".md"))
+    .sort()
+    .map((f) => ({
+      name: `references/${f}`,
+      content: fs.readFileSync(path.join(refDir, f), "utf8"),
+    }));
+}
+
+/**
+ * Inlines a skill's reference files after its main instructions, so the
+ * "consult references/x.md" pointers inside the skill actually resolve
+ * to content Claude can see.
+ */
+function renderSkillWithReferences(content, references) {
+  if (references.length === 0) return content;
+  const blocks = references.map(
+    (r) => `<skill_reference_file name="${r.name}">\n${r.content}\n</skill_reference_file>`
+  );
+  return (
+    `${content}\n\n# Reference Files\n\nThe instructions above consult these reference files; ` +
+    `their full contents follow.\n\n${blocks.join("\n\n")}`
+  );
 }
 
 function personalPathFor(lawyerId, skillId) {
@@ -272,17 +324,24 @@ function versionsPathFor(lawyerId, skillId) {
   return path.join(PERSONAL_SKILLS_DIR, sanitizeLawyerId(lawyerId), `${skillId}.versions.json`);
 }
 
-/** Personal copy if one exists for this lawyer, else the firm default. */
+/**
+ * Personal copy if one exists for this lawyer, else the firm default.
+ * References always come from the firm skill folder -- the personal copy
+ * only ever forks the main instructions file, so coached copies keep
+ * following the firm's reference files.
+ */
 function loadSkillMarkdown(lawyerId, skillId) {
+  const firm = resolveFirmSkillFile(skillId);
+  const references = firm ? loadSkillReferences(firm.dir) : [];
+
   const personalPath = personalPathFor(lawyerId, skillId);
   if (fs.existsSync(personalPath)) {
-    return { content: fs.readFileSync(personalPath, "utf8"), source: "personal" };
+    return { content: fs.readFileSync(personalPath, "utf8"), source: "personal", references };
   }
-  const firmPath = firmDefaultPathFor(skillId);
-  if (!fs.existsSync(firmPath)) {
+  if (!firm) {
     return null;
   }
-  return { content: fs.readFileSync(firmPath, "utf8"), source: "firm-default" };
+  return { content: fs.readFileSync(firm.filePath, "utf8"), source: "firm-default", references };
 }
 
 function readVersions(lawyerId, skillId) {
@@ -307,8 +366,11 @@ function ensurePersonalCopy(lawyerId, skillId) {
   const personalPath = personalPathFor(lawyerId, skillId);
   if (fs.existsSync(personalPath)) return;
 
-  const firmPath = firmDefaultPathFor(skillId);
-  const content = fs.readFileSync(firmPath, "utf8");
+  const firm = resolveFirmSkillFile(skillId);
+  if (!firm) {
+    throw new Error(`No firm-default skill file found for ${skillId}.`);
+  }
+  const content = fs.readFileSync(firm.filePath, "utf8");
   fs.mkdirSync(path.dirname(personalPath), { recursive: true });
   fs.writeFileSync(personalPath, content);
   writeVersions(lawyerId, skillId, [
@@ -345,8 +407,11 @@ app.post("/api/run-skill", (req, res) => {
       if (!loaded) {
         return res.status(404).json({ error: `Skill file not found: ${sourceFile}` });
       }
-      skillInstructions = loaded.content;
-      skillSource = loaded.source;
+      skillInstructions = renderSkillWithReferences(loaded.content, loaded.references);
+      skillSource =
+        loaded.references.length > 0
+          ? `${loaded.source}, +${loaded.references.length} reference file${loaded.references.length === 1 ? "" : "s"}`
+          : loaded.source;
     }
 
     const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -605,7 +670,13 @@ app.post("/api/matter-intake", async (req, res) => {
 // that Skill going forward (classify -> commit -> undo).
 // ---------------------------------------------------------------------------
 
-function buildCoachClassifyPrompt({ displayName, skillMarkdown, priorOutput, lawyerMessage }) {
+function buildCoachClassifyPrompt({ displayName, skillMarkdown, references, priorOutput, lawyerMessage }) {
+  const referenceBlock =
+    references && references.length > 0
+      ? `The skill also has reference files, included for context ONLY -- proposed edits must ` +
+        `target a section of the main skill file above, never a reference file:\n\n` +
+        references.map((r) => `<skill_reference_file name="${r.name}">\n${r.content}\n</skill_reference_file>`).join("\n\n")
+      : null;
   return [
     `You are "Skill Coach" inside Suade, a Word add-in for arbitration lawyers. Skills are ` +
       `markdown playbooks that drive drafting. A lawyer just ran the "${displayName}" Skill, ` +
@@ -626,6 +697,7 @@ function buildCoachClassifyPrompt({ displayName, skillMarkdown, priorOutput, law
       `- "insertText": the exact markdown to insert -- concise, imperative, generalized beyond ` +
       `this matter (no party names unless the guidance is inherently about them)`,
     `<skill_file>\n${skillMarkdown}\n</skill_file>`,
+    ...(referenceBlock ? [referenceBlock] : []),
     `<prior_skill_output>\n${String(priorOutput || "").slice(0, 6000)}\n</prior_skill_output>`,
     `<lawyer_follow_up_message>\n${lawyerMessage}\n</lawyer_follow_up_message>`,
     `Respond with ONLY a JSON object, no other text:\n` +
@@ -673,6 +745,7 @@ app.post("/api/skill-coach/classify", async (req, res) => {
     const prompt = buildCoachClassifyPrompt({
       displayName,
       skillMarkdown: loaded.content,
+      references: loaded.references,
       priorOutput,
       lawyerMessage,
     });
@@ -734,7 +807,7 @@ app.post("/api/skill-coach/commit", (req, res) => {
     if (!proposedEdit || !proposedEdit.targetSection || !proposedEdit.insertText) {
       return res.status(400).json({ error: "proposedEdit with targetSection and insertText is required." });
     }
-    if (!fs.existsSync(firmDefaultPathFor(skillId))) {
+    if (!resolveFirmSkillFile(skillId)) {
       return res.status(404).json({ error: `Skill not found: ${skillId}` });
     }
 
