@@ -473,6 +473,46 @@ function prettifySkillName(skillId) {
     .join(" ");
 }
 
+/**
+ * Anthropic returns transient failures under load: 529 overloaded, 429
+ * rate-limited, and occasional 5xx. A skill run is polled in the
+ * background, so it can afford widely-spaced retries the lawyer never
+ * sees beyond a trace entry. (The SDK's own quick retries still apply
+ * within each attempt; this adds a slower second layer for sustained
+ * overload.)
+ */
+const RETRYABLE_API_STATUSES = new Set([429, 500, 502, 503, 529]);
+const API_RETRY_DELAYS_MS = [5000, 15000, 30000];
+
+async function callClaudeWithRetry(runId, params) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await anthropic.beta.messages.create(params);
+    } catch (err) {
+      const retryable = err && RETRYABLE_API_STATUSES.has(err.status);
+      if (!retryable || attempt >= API_RETRY_DELAYS_MS.length) throw err;
+      const delayMs = API_RETRY_DELAYS_MS[attempt];
+      addTrace(
+        runId,
+        `Claude API ${err.status === 529 ? "overloaded (529)" : `error ${err.status}`} -- retrying in ` +
+          `${delayMs / 1000}s (attempt ${attempt + 2} of ${API_RETRY_DELAYS_MS.length + 1})`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
+/** Raw Anthropic errors read as JSON dumps -- translate the common transient ones for the pane. */
+function friendlyApiError(err) {
+  if (err && err.status === 529) {
+    return "Claude's API is temporarily overloaded (Anthropic-side, transient). Wait a minute and run again.";
+  }
+  if (err && err.status === 429) {
+    return "Claude's API rate limit was hit. Wait a minute and run again.";
+  }
+  return err && err.message ? err.message : "Unknown server error.";
+}
+
 async function executeSkillRun(runId, { skillId, skillInstructions, matter, section, uploadedDocuments, message }) {
   const startedAt = Date.now();
   try {
@@ -495,7 +535,7 @@ async function executeSkillRun(runId, { skillId, skillInstructions, matter, sect
     }
 
     addTrace(runId, `Claude API call started (model ${MODEL})`);
-    const response = await anthropic.beta.messages.create({
+    const response = await callClaudeWithRetry(runId, {
       model: MODEL,
       max_tokens: MAX_TOKENS,
       betas: [FILES_API_BETA],
@@ -569,7 +609,7 @@ async function executeSkillRun(runId, { skillId, skillInstructions, matter, sect
     );
   } catch (err) {
     console.error("Suade backend error:", err);
-    const errorMessage = err.message || "Unknown server error.";
+    const errorMessage = friendlyApiError(err);
     addTrace(runId, `Error: ${errorMessage}`);
     const run = skillRuns.get(runId);
     if (run) {
@@ -728,7 +768,7 @@ app.post("/api/matter-intake", async (req, res) => {
     });
   } catch (err) {
     console.error("Suade matter intake error:", err);
-    res.status(500).json({ error: err.message || "Unknown intake error." });
+    res.status(500).json({ error: friendlyApiError(err) });
   }
 });
 
