@@ -1,16 +1,28 @@
 /**
  * Renders a Skill run's working-notes channel (markdown-ish text:
- * headings, bullets, numbered lists, bold/italic/code) into a formatted
- * .docx, returned as base64 for the task pane to open via Office.js
- * Application.createDocument. Pure JS (docx package) -- no native deps,
- * runs on Render as-is.
+ * headings, bullets, numbered lists, tables, bold/italic/code) into a
+ * formatted .docx, returned as base64 for the task pane to open via
+ * Office.js Application.createDocument. Pure JS (docx package) -- no
+ * native deps, runs on Render as-is.
  *
- * Deliberately modest: covers the structures Skills actually emit in
- * their Output Packages. Tables and images are out of scope; unknown
- * markdown falls through as plain paragraphs, so nothing is dropped.
+ * Covers the structures Skills actually emit in their Output Packages;
+ * unknown markdown falls through as plain paragraphs, so nothing is
+ * dropped. Images are out of scope.
  */
 
-const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } = require("docx");
+const {
+  Document,
+  Packer,
+  Paragraph,
+  TextRun,
+  HeadingLevel,
+  AlignmentType,
+  Table,
+  TableRow,
+  TableCell,
+  WidthType,
+  VerticalAlign,
+} = require("docx");
 
 const NUMBERING_REF = "working-notes-numbered";
 
@@ -42,6 +54,66 @@ function parseInlineRuns(text) {
 
 const HEADING_LEVELS = [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3];
 
+const TABLE_ROW_RE = /^\s*\|.*\|\s*$/;
+const SEPARATOR_CELL_RE = /^:?-{3,}:?$/;
+
+function splitTableRow(line) {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+/**
+ * Markdown pipe table -> Word table. A |---|---| separator as the second
+ * row marks the first row as a shaded, bold header. Cells use a slightly
+ * smaller font so the wide matrices Skills emit (10+ columns of Y/N)
+ * stay on the page.
+ */
+function buildTable(tableLines) {
+  const rawRows = tableLines.map(splitTableRow);
+
+  let headerCells = null;
+  let bodyRows = rawRows;
+  if (rawRows.length >= 2 && rawRows[1].length > 0 && rawRows[1].every((c) => SEPARATOR_CELL_RE.test(c))) {
+    headerCells = rawRows[0];
+    bodyRows = rawRows.slice(2);
+  }
+
+  const columnCount = Math.max(...rawRows.map((r) => r.length));
+  const pad = (cells) => [...cells, ...Array(Math.max(0, columnCount - cells.length)).fill("")];
+
+  const makeCell = (text, isHeader) =>
+    new TableCell({
+      verticalAlign: VerticalAlign.CENTER,
+      shading: isHeader ? { fill: "EEF1F5" } : undefined,
+      margins: { top: 40, bottom: 40, left: 80, right: 80 },
+      children: [
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: text.replace(/\*\*/g, "").replace(/`/g, ""),
+              bold: isHeader,
+              size: 18, // 9pt -- keeps wide matrices readable on the page
+            }),
+          ],
+        }),
+      ],
+    });
+
+  const rows = [];
+  if (headerCells) {
+    rows.push(new TableRow({ tableHeader: true, children: pad(headerCells).map((c) => makeCell(c, true)) }));
+  }
+  for (const cells of bodyRows) {
+    rows.push(new TableRow({ children: pad(cells).map((c) => makeCell(c, false)) }));
+  }
+
+  return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows });
+}
+
 function markdownToParagraphs(markdown) {
   const paragraphs = [];
   let buffer = [];
@@ -50,14 +122,30 @@ function markdownToParagraphs(markdown) {
   let listInstance = 0;
   let inNumberedList = false;
 
+  let tableLines = [];
+
   const flushBuffer = () => {
     if (buffer.length === 0) return;
     paragraphs.push(new Paragraph({ children: parseInlineRuns(buffer.join(" ")), spacing: { after: 120 } }));
     buffer = [];
   };
 
+  const flushTable = () => {
+    if (tableLines.length === 0) return;
+    paragraphs.push(buildTable(tableLines));
+    paragraphs.push(new Paragraph({ children: [], spacing: { after: 60 } })); // breathing room after the table
+    tableLines = [];
+  };
+
   for (const rawLine of markdown.split("\n")) {
     const line = rawLine.trimEnd();
+
+    if (TABLE_ROW_RE.test(line)) {
+      flushBuffer();
+      tableLines.push(line);
+      continue;
+    }
+    flushTable();
 
     const headingMatch = line.match(/^(#{1,6})\s+(.*)$/);
     const bulletMatch = line.match(/^\s*[-*]\s+(.*)$/);
@@ -103,6 +191,7 @@ function markdownToParagraphs(markdown) {
       buffer.push(line.trim());
     }
   }
+  flushTable();
   flushBuffer();
 
   return paragraphs;
