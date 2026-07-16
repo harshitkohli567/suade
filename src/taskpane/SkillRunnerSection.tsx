@@ -5,7 +5,7 @@ import { useSkillRunner } from "./hooks/useSkillRunner";
 import { useSkillFeedback } from "./hooks/useSkillFeedback";
 import { useSkillCoach, CATEGORY_LABELS } from "./hooks/useSkillCoach";
 import { DOCUMENT_ROLES, UploadJob } from "./hooks/useDocumentUploads";
-import { insertTextAtSectionEnd } from "./office/insertContent";
+import { insertTextAtSectionEnd, insertTextAtCursor } from "./office/insertContent";
 import UploadProgress from "./UploadProgress";
 
 interface RunMeta {
@@ -63,6 +63,7 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
   const [editedOutput, setEditedOutput] = useState("");
   const [insertState, setInsertState] = useState<"idle" | "inserting" | "done" | "error">("idle");
   const [insertError, setInsertError] = useState<string | null>(null);
+  const [insertTarget, setInsertTarget] = useState<string | null>(null);
   const [lastRunMeta, setLastRunMeta] = useState<RunMeta | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [traceCollapsed, setTraceCollapsed] = useState(false);
@@ -131,15 +132,18 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
   };
 
   const handleInsert = async () => {
-    if (!activeSection) {
-      setInsertError("No active section detected -- click into a section of the document first.");
-      setInsertState("error");
-      return;
-    }
     setInsertState("inserting");
     setInsertError(null);
     try {
-      await insertTextAtSectionEnd(activeSection, editedOutput);
+      // Section end when we know where we are; cursor fallback otherwise
+      // (e.g. a blank document during intake has no sections yet).
+      if (activeSection) {
+        await insertTextAtSectionEnd(activeSection, editedOutput);
+        setInsertTarget(`at the end of section ${activeSection.sectionId}`);
+      } else {
+        await insertTextAtCursor(editedOutput);
+        setInsertTarget("at the cursor position");
+      }
       setInsertState("done");
     } catch (err) {
       setInsertError(err instanceof Error ? err.message : "Unknown error inserting into document.");
@@ -414,7 +418,7 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
             <button
               style={styles.insertButton}
               onClick={handleInsert}
-              disabled={insertState === "inserting" || !activeSection}
+              disabled={insertState === "inserting"}
             >
               {insertState === "inserting" ? "Inserting…" : "Insert into Document"}
             </button>
@@ -425,14 +429,14 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
 
           {!activeSection && (
             <p style={styles.helperText}>
-              <em>No active section detected -- click into a section of the document to enable insert.</em>
+              <em>No section detected -- the output will be inserted at the cursor position.</em>
             </p>
           )}
 
           {insertState === "done" && (
             <p style={styles.successText}>
-              Inserted as a tracked change at the end of section {activeSection?.sectionId}. Review
-              it in Word (Review tab -- Track Changes) before accepting.
+              Inserted as a tracked change {insertTarget}. Review it in Word (Review tab -- Track
+              Changes) before accepting.
             </p>
           )}
 
