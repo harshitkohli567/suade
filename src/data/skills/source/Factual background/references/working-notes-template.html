@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Working Notes - {{MATTER_NAME}}</title>
+<style>
+  :root {
+    --navy: #1F3864;
+    --navy-light: #2E4E86;
+    --gray-bg: #F2F2F2;
+    --border: #D9D9D9;
+    --text: #1A1A1A;
+    --muted: #595959;
+    --amber: #B8860B;
+    --red: #A6353F;
+    --green: #3C7A4B;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text);
+    background: #FFFFFF;
+  }
+  header {
+    background: var(--navy);
+    color: #FFFFFF;
+    padding: 20px 28px;
+  }
+  header h1 { margin: 0; font-size: 20px; font-weight: 700; }
+  header .meta { margin-top: 4px; font-size: 13px; color: #C9D3E3; }
+  nav.tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    background: var(--gray-bg);
+    padding: 10px 20px 0 20px;
+    border-bottom: 2px solid var(--navy);
+  }
+  nav.tabs button {
+    border: 1px solid var(--border);
+    border-bottom: none;
+    background: #FFFFFF;
+    color: var(--navy);
+    padding: 9px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 6px 6px 0 0;
+    cursor: pointer;
+  }
+  nav.tabs button.active {
+    background: var(--navy);
+    color: #FFFFFF;
+  }
+  nav.tabs .count {
+    display: inline-block;
+    margin-left: 6px;
+    font-size: 11px;
+    background: var(--gray-bg);
+    color: var(--navy);
+    border-radius: 10px;
+    padding: 1px 7px;
+  }
+  nav.tabs button.active .count { background: rgba(255,255,255,0.25); color: #FFFFFF; }
+  main { padding: 22px 28px 40px 28px; max-width: 1100px; margin: 0 auto; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .panel h2 { color: var(--navy); font-size: 17px; margin-top: 0; }
+  .panel .intro { color: var(--muted); font-size: 14px; margin-bottom: 16px; }
+  .search-box {
+    width: 100%;
+    max-width: 320px;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    font-size: 13px;
+    margin-bottom: 14px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin-bottom: 10px;
+  }
+  th {
+    background: var(--navy);
+    color: #FFFFFF;
+    text-align: left;
+    padding: 8px 10px;
+    font-weight: 600;
+  }
+  td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tr:nth-child(even) td { background: #FAFAFA; }
+  a.source-link { color: var(--navy-light); text-decoration: underline; }
+  a.source-link:hover { color: var(--navy); }
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 10px;
+    color: #FFFFFF;
+  }
+  .badge.direct_contradiction, .badge.material_adverse_fact, .badge.central_counterfact { background: var(--red); }
+  .badge.tension, .badge.contextual_qualification, .badge.credibility_vulnerability { background: var(--amber); }
+  .badge.corroboration, .badge.immaterially_unfavorable { background: var(--green); }
+  .badge.qualification, .badge.temporal_change, .badge.difference_in_knowledge,
+  .badge.unclear, .badge.alternative_story_evidence, .badge.omission_risk_fact,
+  .badge.ambiguous { background: var(--muted); }
+  .empty-state { color: var(--muted); font-style: italic; padding: 12px 0; }
+  footer {
+    text-align: center;
+    font-size: 11px;
+    color: var(--muted);
+    padding: 18px;
+    border-top: 1px solid var(--border);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Working Notes and Analysis - {{MATTER_NAME}}</h1>
+  <div class="meta">Factual Background Skill - generated {{GENERATED_TIMESTAMP}}</div>
+</header>
+
+<nav class="tabs">
+  <button class="tab-btn active" data-tab="document-index">Document Index <span class="count">{{DOC_INDEX_COUNT}}</span></button>
+  <button class="tab-btn" data-tab="fact-table">Fact Table <span class="count">{{FACT_TABLE_COUNT}}</span></button>
+  <button class="tab-btn" data-tab="relevance">Relevance Assessment <span class="count">{{RELEVANCE_COUNT}}</span></button>
+  <button class="tab-btn" data-tab="contradictions">Contradiction Log <span class="count">{{CONTRADICTION_COUNT}}</span></button>
+  <button class="tab-btn" data-tab="adverse-facts">Adverse-Fact Log <span class="count">{{ADVERSE_FACT_COUNT}}</span></button>
+  <button class="tab-btn" data-tab="exhibits">Exhibit &amp; Sub-Header Map <span class="count">{{EXHIBIT_COUNT}}</span></button>
+  <button class="tab-btn" data-tab="dispositions">Dispositions <span class="count">{{DISPOSITION_COUNT}}</span></button>
+  <button class="tab-btn" data-tab="end-notes">End Notes <span class="count">{{END_NOTES_COUNT}}</span></button>
+  <button class="tab-btn" data-tab="gap-report">Gap Report <span class="count">{{GAP_REPORT_COUNT}}</span></button>
+</nav>
+
+<main>
+
+  <section class="panel active" id="document-index">
+    <h2>Document Index</h2>
+    <p class="intro">One row per document reviewed, sorted chronologically. Source column links to the canonical exhibit URL.</p>
+    <input class="search-box" type="text" placeholder="Filter documents..." data-filter-target="document-index">
+    <!-- INJECT: document_index_table -->
+    <!-- Columns: Doc ID | Title | Date | Parties | Source -->
+    <!-- If empty, replace with: <p class="empty-state">No documents indexed yet.</p> -->
+  </section>
+
+  <section class="panel" id="fact-table">
+    <h2>Fact Table</h2>
+    <p class="intro"><!-- INJECT: fact_table_summary --></p>
+    <input class="search-box" type="text" placeholder="Filter facts..." data-filter-target="fact-table">
+    <!-- INJECT: fact_table -->
+    <!-- Columns: # | Fact title | Fact | Source -->
+  </section>
+
+  <section class="panel" id="relevance">
+    <h2>Relevance Assessment (10-Parameter Test)</h2>
+    <p class="intro">Yes/No scoring per document against the 10 relevance parameters. A document is relevant if it scores Yes on any of parameters 1-8, or is implicated in a contradiction (9) or an adverse fact (10).</p>
+    <!-- INJECT: relevance_assessment_table -->
+    <!-- Columns: Doc ID | Event | Temporal | Actor | Causal | Legal | Theory | Corroboration | Context | Contradiction | Adverse Fact | Relevant? -->
+  </section>
+
+  <section class="panel" id="contradictions">
+    <h2>Contradiction Log</h2>
+    <p class="intro">Every potential contradiction identified between documents, per the contradiction-detection protocol. Not resolved by this skill - logged for the lawyer's decision.</p>
+    <!-- INJECT: contradiction_log -->
+    <!-- Each entry: Proposition A / Source A / Proposition B / Source B / Classification badge / Explanation / Confidence / Additional evidence needed -->
+    <!-- If empty: <p class="empty-state">No contradictions identified.</p> -->
+  </section>
+
+  <section class="panel" id="adverse-facts">
+    <h2>Adverse-Fact Log</h2>
+    <p class="intro">Facts materially adverse to the client's position, per the adverse-fact-detection protocol, with recommended treatment.</p>
+    <!-- INJECT: adverse_fact_log -->
+    <!-- Each entry: Target proposition / Adverse fact / Source / How it weakens the narrative / Opponent's strongest use / Available explanation / Classification badge / Recommended treatment / Confidence / Additional evidence needed -->
+    <!-- If empty: <p class="empty-state">No material adverse facts identified.</p> -->
+  </section>
+
+  <section class="panel" id="exhibits">
+    <h2>Exhibit Numbering Map &amp; Sub-Header Architecture</h2>
+    <p class="intro">Doc ID to exhibit reference mapping, and the sub-header structure used in the clean draft with its supporting Legal Theory Brief element.</p>
+    <h3 style="font-size:14px;color:var(--navy);">Exhibit Map</h3>
+    <!-- INJECT: exhibit_map_table -->
+    <!-- Columns: Doc ID | Exhibit Ref | Description | Source -->
+    <h3 style="font-size:14px;color:var(--navy);margin-top:20px;">Sub-Header Map</h3>
+    <!-- INJECT: sub_header_map_table -->
+    <!-- Columns: Letter | Title | Legal Theory Brief Element -->
+  </section>
+
+  <section class="panel" id="dispositions">
+    <h2>Dispositions</h2>
+    <p class="intro">Every fact, contradiction, and adverse fact that required an explicit decision, with the reasoning logged.</p>
+    <h3 style="font-size:14px;color:var(--navy);">Excluded Facts</h3>
+    <!-- INJECT: excluded_facts_table -->
+    <h3 style="font-size:14px;color:var(--navy);margin-top:20px;">Contradiction Dispositions</h3>
+    <!-- INJECT: contradiction_dispositions_table -->
+    <h3 style="font-size:14px;color:var(--navy);margin-top:20px;">Adverse-Fact Dispositions</h3>
+    <!-- INJECT: adverse_fact_dispositions_table -->
+  </section>
+
+  <section class="panel" id="end-notes">
+    <h2>End Notes</h2>
+    <p class="intro">Every flag raised during document review - undated or ambiguous documents, unresolved source-URL gaps, and similar issues - collected in one place.</p>
+    <!-- INJECT: end_notes_table -->
+    <!-- Columns: Type | Doc ID | Note -->
+    <!-- If empty: <p class="empty-state">No flags raised.</p> -->
+  </section>
+
+  <section class="panel" id="gap-report">
+    <h2>Gap Report</h2>
+    <p class="intro">Anything unresolved from the verification sweep - facts without a disposition, citations that don't resolve, or consistency mismatches against the Brief Summary of Facts.</p>
+    <!-- INJECT: gap_report_table -->
+    <!-- Columns: Check | Description | Related Item -->
+    <!-- If empty: <p class="empty-state">No open gaps - verification sweep passed cleanly.</p> -->
+  </section>
+
+</main>
+
+<footer>Generated by Suade - Factual Background Skill - working notes are not part of the filed Statement of Claim.</footer>
+
+<script>
+(function () {
+  var tabs = document.querySelectorAll('.tab-btn');
+  var panels = document.querySelectorAll('.panel');
+  tabs.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      tabs.forEach(function (b) { b.classList.remove('active'); });
+      panels.forEach(function (p) { p.classList.remove('active'); });
+      btn.classList.add('active');
+      document.getElementById(btn.getAttribute('data-tab')).classList.add('active');
+    });
+  });
+
+  var filters = document.querySelectorAll('.search-box');
+  filters.forEach(function (input) {
+    input.addEventListener('input', function () {
+      var panelId = input.getAttribute('data-filter-target');
+      var rows = document.querySelectorAll('#' + panelId + ' table tbody tr');
+      var q = input.value.toLowerCase();
+      rows.forEach(function (row) {
+        row.style.display = row.textContent.toLowerCase().indexOf(q) === -1 ? 'none' : '';
+      });
+    });
+  });
+})();
+</script>
+
+</body>
+</html>
