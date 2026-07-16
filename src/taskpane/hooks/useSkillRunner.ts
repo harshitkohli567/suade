@@ -19,9 +19,19 @@ export interface TraceEntry {
   message: string;
 }
 
+/** Channel-2 output: a rendered .docx normally, or raw text if rendering failed. */
+export type WorkingNotes = { kind: "docx"; base64: string; filename: string } | { kind: "inline"; text: string };
+
 type RunStatus =
   | { status: "pending"; trace?: TraceEntry[] }
-  | { status: "done"; output: string; trace?: TraceEntry[] }
+  | {
+      status: "done";
+      output: string;
+      trace?: TraceEntry[];
+      workingNotesDocxBase64?: string | null;
+      workingNotesFilename?: string | null;
+      workingNotesInline?: string | null;
+    }
   | { status: "error"; error: string; trace?: TraceEntry[] };
 
 function sleep(ms: number): Promise<void> {
@@ -37,6 +47,7 @@ function sleep(ms: number): Promise<void> {
  */
 export function useSkillRunner() {
   const [output, setOutput] = useState<string | null>(null);
+  const [workingNotes, setWorkingNotes] = useState<WorkingNotes | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [trace, setTrace] = useState<TraceEntry[]>([]);
@@ -45,6 +56,7 @@ export function useSkillRunner() {
     setLoading(true);
     setError(null);
     setOutput(null);
+    setWorkingNotes(null);
     setTrace([]);
 
     try {
@@ -95,6 +107,11 @@ export function useSkillRunner() {
           setTrace(result.trace);
         }
         if (result.status === "done") {
+          if (result.workingNotesDocxBase64 && result.workingNotesFilename) {
+            setWorkingNotes({ kind: "docx", base64: result.workingNotesDocxBase64, filename: result.workingNotesFilename });
+          } else if (result.workingNotesInline) {
+            setWorkingNotes({ kind: "inline", text: result.workingNotesInline });
+          }
           setOutput(result.output);
           return;
         }
@@ -116,5 +133,5 @@ export function useSkillRunner() {
     }
   };
 
-  return { run, output, loading, error, trace };
+  return { run, output, workingNotes, loading, error, trace };
 }

@@ -6,6 +6,7 @@ import { useSkillFeedback } from "./hooks/useSkillFeedback";
 import { useSkillCoach, CATEGORY_LABELS } from "./hooks/useSkillCoach";
 import { DOCUMENT_ROLES, UploadJob } from "./hooks/useDocumentUploads";
 import { insertTextAtSectionEnd, insertTextAtCursor } from "./office/insertContent";
+import { openDocxInNewWindow } from "./office/openDocx";
 import UploadProgress from "./UploadProgress";
 
 interface RunMeta {
@@ -56,7 +57,7 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
   const [selectedSkillId, setSelectedSkillId] = useState("");
   const [uploadRole, setUploadRole] = useState<DocumentRole>("exhibit");
   const [message, setMessage] = useState("");
-  const { run, output, loading, error, trace } = useSkillRunner();
+  const { run, output, workingNotes, loading, error, trace } = useSkillRunner();
   const feedback = useSkillFeedback();
   const skillCoach = useSkillCoach();
 
@@ -64,6 +65,9 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
   const [insertState, setInsertState] = useState<"idle" | "inserting" | "done" | "error">("idle");
   const [insertError, setInsertError] = useState<string | null>(null);
   const [insertTarget, setInsertTarget] = useState<string | null>(null);
+  const [notesOpenState, setNotesOpenState] = useState<"idle" | "opening" | "error">("idle");
+  const [notesOpenError, setNotesOpenError] = useState<string | null>(null);
+  const [inlineNotesCollapsed, setInlineNotesCollapsed] = useState(true);
   const [lastRunMeta, setLastRunMeta] = useState<RunMeta | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [traceCollapsed, setTraceCollapsed] = useState(false);
@@ -155,6 +159,19 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
     setEditedOutput("");
     setInsertState("idle");
     setInsertError(null);
+  };
+
+  const handleOpenNotes = async () => {
+    if (!workingNotes || workingNotes.kind !== "docx") return;
+    setNotesOpenState("opening");
+    setNotesOpenError(null);
+    try {
+      await openDocxInNewWindow(workingNotes.base64);
+      setNotesOpenState("idle");
+    } catch (err) {
+      setNotesOpenError(err instanceof Error ? err.message : "Unknown error opening working notes.");
+      setNotesOpenState("error");
+    }
   };
 
   // Message composer + run button + everything that reports on a run
@@ -373,9 +390,8 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
       {output !== null && (
         <div style={styles.outputBox}>
           <p style={styles.outputLabel}>
-            Edit this down to just the clean draft before inserting -- the full output above often
-            includes working material (Gap Reports, checklists) that shouldn't land in the pleading
-            itself.
+            Clean draft -- review and edit before inserting. Working material (gap reports,
+            checklists) is kept separate below.
           </p>
           <textarea
             style={styles.outputTextarea}
@@ -383,6 +399,33 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
             onChange={(e) => setEditedOutput(e.target.value)}
             rows={14}
           />
+
+          {workingNotes && workingNotes.kind === "docx" && (
+            <div style={styles.notesRow}>
+              <button style={styles.notesButton} onClick={handleOpenNotes} disabled={notesOpenState === "opening"}>
+                {notesOpenState === "opening" ? "Opening…" : "Open working notes in Word"}
+              </button>
+              <span style={styles.notesFilename}>{workingNotes.filename}</span>
+            </div>
+          )}
+
+          {notesOpenState === "error" && notesOpenError && (
+            <div style={styles.errorBox}>
+              <strong>Working notes error:</strong> {notesOpenError}
+            </div>
+          )}
+
+          {workingNotes && workingNotes.kind === "inline" && (
+            <div style={styles.inlineNotesPanel}>
+              <div style={styles.traceHeader}>
+                <p style={styles.traceTitle}>Working notes (document generation failed -- shown inline)</p>
+                <button style={styles.traceCollapseButton} onClick={() => setInlineNotesCollapsed((p) => !p)}>
+                  {inlineNotesCollapsed ? "Show" : "Hide"}
+                </button>
+              </div>
+              {!inlineNotesCollapsed && <pre style={styles.inlineNotesText}>{workingNotes.text}</pre>}
+            </div>
+          )}
 
           {composer}
 
@@ -644,6 +687,41 @@ const styles: Record<string, React.CSSProperties> = {
   voteButtonActiveUp: { background: "#EAF1E8", border: "1px solid #2C5530" },
   voteButtonActiveDown: { background: "#FBEAEA", border: "1px solid #B3261E" },
   feedbackErrorText: { fontSize: "11px", color: "#B3261E" },
+  notesRow: { display: "flex", alignItems: "center", gap: "8px", marginTop: "8px" },
+  notesButton: {
+    fontSize: "12px",
+    padding: "6px 12px",
+    background: "#fff",
+    color: "#1F3A5F",
+    border: "1px solid #1F3A5F",
+    borderRadius: "4px",
+    cursor: "pointer",
+    flexShrink: 0,
+  },
+  notesFilename: {
+    fontSize: "10px",
+    color: "#8A93A0",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  inlineNotesPanel: {
+    marginTop: "8px",
+    fontSize: "11px",
+    background: "#FFF8E6",
+    border: "1px solid #E0C878",
+    borderRadius: "4px",
+    padding: "8px 10px",
+  },
+  inlineNotesText: {
+    margin: "8px 0 0 0",
+    whiteSpace: "pre-wrap",
+    fontFamily: "Segoe UI, sans-serif",
+    fontSize: "11px",
+    lineHeight: 1.5,
+    maxHeight: "200px",
+    overflowY: "auto",
+  },
   insertRow: { display: "flex", gap: "8px", marginTop: "8px" },
   insertButton: {
     fontSize: "12px",

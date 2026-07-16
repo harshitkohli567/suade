@@ -10,6 +10,7 @@ const { toFile } = require("@anthropic-ai/sdk");
 const devCerts = require("office-addin-dev-certs");
 const mammoth = require("mammoth");
 const MsgReader = require("@kenjiuno/msgreader").default;
+const { buildWorkingNotesDocx } = require("./workingNotesDocx");
 const {
   sanitizeLawyerId,
   isProtectedSection,
@@ -442,6 +443,36 @@ app.get("/api/run-skill/:runId", (req, res) => {
   res.json(run);
 });
 
+/**
+ * Splits a skill response into its two channels. Tag-less responses
+ * (message-only runs, or a model that ignored the format) fall back to
+ * everything-is-the-draft so nothing is ever lost.
+ */
+function splitChannels(text) {
+  const draftMatch = text.match(/<clean_draft>([\s\S]*?)<\/clean_draft>/i);
+  const notesMatch = text.match(/<working_notes>([\s\S]*?)<\/working_notes>/i);
+
+  if (!draftMatch) {
+    const withoutNotes = notesMatch ? text.replace(notesMatch[0], "") : text;
+    return {
+      cleanDraft: withoutNotes.trim(),
+      workingNotes: notesMatch && notesMatch[1].trim() ? notesMatch[1].trim() : null,
+    };
+  }
+
+  return {
+    cleanDraft: draftMatch[1].trim(),
+    workingNotes: notesMatch && notesMatch[1].trim() ? notesMatch[1].trim() : null,
+  };
+}
+
+function prettifySkillName(skillId) {
+  return String(skillId || "Skill")
+    .split("-")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
 async function executeSkillRun(runId, { skillId, skillInstructions, matter, section, uploadedDocuments, message }) {
   const startedAt = Date.now();
   try {
@@ -475,16 +506,51 @@ async function executeSkillRun(runId, { skillId, skillInstructions, matter, sect
 
     console.log("Suade DEBUG: response block types:", response.content.map((b) => b.type), "| stop_reason:", response.stop_reason);
     const textBlock = response.content.find((block) => block.type === "text");
-    const output = textBlock ? textBlock.text : "";
+    const rawOutput = textBlock ? textBlock.text : "";
     const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
-    addTrace(runId, `Response complete: ${output.length.toLocaleString()} characters in ${seconds}s`);
+    addTrace(runId, `Response complete: ${rawOutput.length.toLocaleString()} characters in ${seconds}s`);
+
+    const { cleanDraft, workingNotes } = splitChannels(rawOutput);
+
+    let workingNotesDocxBase64 = null;
+    let workingNotesFilename = null;
+    let workingNotesInline = null;
+    if (workingNotes) {
+      addTrace(
+        runId,
+        `Split output: clean draft ${cleanDraft.length.toLocaleString()} chars, working notes ${workingNotes.length.toLocaleString()} chars`
+      );
+      try {
+        const stamp = new Date().toISOString().slice(0, 16).replace("T", "-").replace(":", "");
+        workingNotesFilename = `${skillId || "skill"}-working-notes-${stamp}.docx`;
+        workingNotesDocxBase64 = await buildWorkingNotesDocx({
+          skillDisplayName: prettifySkillName(skillId),
+          matterId: matter ? matter.matterId : null,
+          notesMarkdown: workingNotes,
+        });
+        addTrace(
+          runId,
+          `Working notes rendered to ${workingNotesFilename} (${Math.round(workingNotesDocxBase64.length / 1370)} KB)`
+        );
+      } catch (docxErr) {
+        // Never lose the notes: fall back to inline display in the pane.
+        console.error("Suade working-notes docx generation failed:", docxErr);
+        addTrace(runId, "Working notes .docx generation failed -- notes shown inline instead");
+        workingNotesFilename = null;
+        workingNotesDocxBase64 = null;
+        workingNotesInline = workingNotes;
+      }
+    }
 
     // Mutate rather than replace so the accumulated trace survives; bump
     // createdAt so the TTL sweep counts from completion, not run start.
     const run = skillRuns.get(runId);
     if (run) {
       run.status = "done";
-      run.output = output;
+      run.output = cleanDraft;
+      run.workingNotesDocxBase64 = workingNotesDocxBase64;
+      run.workingNotesFilename = workingNotesFilename;
+      run.workingNotesInline = workingNotesInline;
       run.createdAt = Date.now();
     }
 
@@ -497,7 +563,8 @@ async function executeSkillRun(runId, { skillId, skillInstructions, matter, sect
         skillId: skillId || null,
         matterId: matter ? matter.matterId : null,
         timestamp: new Date().toISOString(),
-        output,
+        output: cleanDraft,
+        workingNotes,
       })}\n`
     );
   } catch (err) {
@@ -960,6 +1027,26 @@ function buildPrompt({ skillInstructions, matter, section, uploadedDocuments, me
       `actually supplied above (including any document listed as not attached), say so explicitly ` +
       `rather than inventing it. Produce the clean draft output the Skill instructions describe.`
   );
+
+  if (skillInstructions) {
+    // Two-channel output contract: the task pane shows only the clean
+    // draft; the working notes get rendered into a separate .docx.
+    parts.push(
+      `# Response Format (mandatory)\n\n` +
+        `Structure your ENTIRE response as exactly two tagged channels, with nothing outside the tags:\n\n` +
+        `<clean_draft>\n` +
+        `Only the insert-ready draft text -- the numbered clauses / narrative the Skill's output ` +
+        `describes. No gap reports, no checklists, no commentary, no process headings, no ` +
+        `explanations of what you did.\n` +
+        `</clean_draft>\n\n` +
+        `<working_notes>\n` +
+        `Everything else the Skill's Output Package calls for: gap reports, verification ` +
+        `checklists, source/fact tables, flags, caveats, open questions. Use markdown headings ` +
+        `and bullet/numbered lists. If there is genuinely nothing beyond the draft, leave this ` +
+        `tag empty.\n` +
+        `</working_notes>`
+    );
+  }
 
   return parts.join("\n\n---\n\n");
 }
