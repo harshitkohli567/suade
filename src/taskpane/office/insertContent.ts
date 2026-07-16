@@ -22,42 +22,77 @@ import { DocumentSection } from "@/types";
 function splitIntoParagraphBlocks(text: string): string[] {
   return text
     .split(/\n\s*\n/)
-    .map((block) => block.replace(/\s*\n\s*/g, " ").trim())
+    .map((block) => block.trim())
     .filter((block) => block.length > 0);
 }
 
 const MD_LINK_RE = /\[([^\]]+)\]\(([^)\s]+)\)/;
+// Any markdown construct whose literal characters must NOT reach the
+// pleading: links, bold/italic asterisks, backticks, # headings, bullets.
+const MD_ARTIFACT_RE = /\[[^\]]+\]\([^)\s]+\)|\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|^#{1,6}\s|^\s*[-*]\s+/m;
 
 function escapeHtml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+/** Inline markdown -> HTML; anything Word can't show becomes clean text, never literal symbols. */
+function inlineMarkdownToHtml(value: string): string {
+  return escapeHtml(value)
+    .replace(new RegExp(MD_LINK_RE.source, "g"), (_match, label, url) => `<a href="${url}">${label}</a>`)
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+    .replace(/`([^`]+)`/g, "$1");
+}
+
+/**
+ * Draft markdown -> HTML for Word insertion. Prose paragraphs collapse
+ * internal newlines; "#" headings become bold paragraphs (real Word
+ * Heading styles would collide with the document's own section
+ * numbering); "-" bullets become a proper list. Literally-numbered
+ * clauses ("12. The Claimant...") stay literal text -- converting them
+ * to a Word auto-numbered list would silently renumber a pleading.
+ */
 function blocksToHtml(text: string): string {
   return splitIntoParagraphBlocks(text)
     .map((block) => {
-      const withLinks = escapeHtml(block).replace(
-        new RegExp(MD_LINK_RE.source, "g"),
-        (_match, label, url) => `<a href="${url}">${label}</a>`
-      );
-      return `<p>${withLinks}</p>`;
+      const lines = block.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+
+      const headingMatch = lines.length === 1 ? lines[0].match(/^#{1,6}\s+(.*)$/) : null;
+      if (headingMatch) {
+        return `<p><strong>${inlineMarkdownToHtml(headingMatch[1])}</strong></p>`;
+      }
+
+      if (lines.every((l) => /^\s*[-*]\s+/.test(l))) {
+        const items = lines.map((l) => `<li>${inlineMarkdownToHtml(l.replace(/^\s*[-*]\s+/, ""))}</li>`).join("");
+        return `<ul>${items}</ul>`;
+      }
+
+      // Numbered clauses on separate lines stay separate paragraphs with
+      // their literal numbers; ordinary prose collapses to one paragraph.
+      if (lines.length > 1 && lines.every((l) => /^\d+[.)]\s+/.test(l))) {
+        return lines.map((l) => `<p>${inlineMarkdownToHtml(l)}</p>`).join("");
+      }
+
+      return `<p>${inlineMarkdownToHtml(lines.join(" "))}</p>`;
     })
     .join("");
 }
 
 /**
- * Drafts containing markdown citation links go in as HTML so the links
- * become real Word hyperlinks; link-free drafts keep the original
+ * Drafts containing any markdown construct go in as HTML, so formatting
+ * renders as intended (hyperlinks, bold, lists) and no literal markdown
+ * symbols land in the pleading. Fully plain drafts keep the original
  * insertParagraph path, which inherits surrounding formatting more
  * faithfully than HTML insertion does.
  */
 function insertBlocksAfterParagraph(paragraph: Word.Paragraph, text: string): void {
-  if (MD_LINK_RE.test(text)) {
+  if (MD_ARTIFACT_RE.test(text)) {
     paragraph.getRange(Word.RangeLocation.whole).insertHtml(blocksToHtml(text), Word.InsertLocation.after);
     return;
   }
   let insertAfter = paragraph;
   for (const block of splitIntoParagraphBlocks(text)) {
-    insertAfter = insertAfter.insertParagraph(block, Word.InsertLocation.after);
+    insertAfter = insertAfter.insertParagraph(block.replace(/\s*\n\s*/g, " "), Word.InsertLocation.after);
   }
 }
 

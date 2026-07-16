@@ -24,6 +24,7 @@ const {
   findRepoMatchByParties,
   nextIntakeMatterId,
 } = require("./serverMatters");
+const { pdfViewerHtml, textViewerHtml, noPreviewHtml } = require("./documentViewer");
 
 /**
  * Suade backend (Step 7, extended Step 9). Holds the Anthropic API key
@@ -150,13 +151,18 @@ const UPLOADS_DIR = process.env.SUADE_UPLOADS_DIR || path.join(__dirname, "uploa
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 const DOC_TOKEN_RE = /^doc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-function storeHostedDocument(buffer, filename, mimeType) {
+function storeHostedDocument(buffer, filename, mimeType, textExtract) {
   const token = `doc-${require("crypto").randomUUID()}`;
   fs.writeFileSync(path.join(UPLOADS_DIR, token), buffer);
   fs.writeFileSync(
     path.join(UPLOADS_DIR, `${token}.json`),
     JSON.stringify({ filename, mimeType, uploadedAt: new Date().toISOString() })
   );
+  if (textExtract) {
+    // Powers the highlight viewer for formats browsers can't render
+    // (DOCX/MSG); PDFs are searched client-side by PDF.js instead.
+    fs.writeFileSync(path.join(UPLOADS_DIR, `${token}.txt`), textExtract);
+  }
   return token;
 }
 
@@ -262,8 +268,11 @@ app.post("/api/upload-document", async (req, res) => {
       betas: [FILES_API_BETA],
     });
 
-    // Host the ORIGINAL file (not the extraction) for citation links.
-    const documentToken = storeHostedDocument(buffer, filename, mimeType);
+    // Host the ORIGINAL file (not the extraction) for citation links; keep
+    // the text extraction beside it for the highlight viewer. For plain
+    // text the original is its own extraction.
+    const textExtract = uploadMimeType === "text/plain" ? uploadBuffer.toString("utf8") : null;
+    const documentToken = storeHostedDocument(buffer, filename, mimeType, textExtract);
 
     res.json({
       fileId: uploaded.id,
@@ -277,6 +286,40 @@ app.post("/api/upload-document", async (req, res) => {
     console.error("Suade backend upload error:", err);
     res.status(500).json({ error: err.message || "Unknown upload error." });
   }
+});
+
+// PDF.js assets for the citation viewer, served from node_modules (no CDN).
+app.use("/vendor/pdfjs", express.static(path.join(__dirname, "node_modules", "pdfjs-dist", "build")));
+
+/**
+ * Citation-highlight viewer. The supporting quote arrives in the URL
+ * fragment (#q=...), which browsers never send to the server -- matching
+ * and highlighting run entirely client-side.
+ */
+app.get("/api/documents/:token/view", (req, res) => {
+  const { token } = req.params;
+  if (!DOC_TOKEN_RE.test(token)) {
+    return res.status(400).json({ error: "Invalid document token." });
+  }
+
+  const metaPath = path.join(UPLOADS_DIR, `${token}.json`);
+  if (!fs.existsSync(metaPath) || !fs.existsSync(path.join(UPLOADS_DIR, token))) {
+    return res.status(404).send("Document not found -- it may have been removed.");
+  }
+
+  const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+  const filename = meta.filename || token;
+  const isPdf = meta.mimeType === "application/pdf" || filename.toLowerCase().endsWith(".pdf");
+  const textPath = path.join(UPLOADS_DIR, `${token}.txt`);
+
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  if (isPdf) {
+    return res.send(pdfViewerHtml({ token, filename }));
+  }
+  if (fs.existsSync(textPath)) {
+    return res.send(textViewerHtml({ token, filename, text: fs.readFileSync(textPath, "utf8") }));
+  }
+  res.send(noPreviewHtml({ token, filename }));
 });
 
 app.get("/api/documents/:token", (req, res) => {
@@ -307,6 +350,7 @@ app.delete("/api/upload-document/:fileId", async (req, res) => {
     if (typeof docToken === "string" && DOC_TOKEN_RE.test(docToken)) {
       fs.rmSync(path.join(UPLOADS_DIR, docToken), { force: true });
       fs.rmSync(path.join(UPLOADS_DIR, `${docToken}.json`), { force: true });
+      fs.rmSync(path.join(UPLOADS_DIR, `${docToken}.txt`), { force: true });
     }
 
     res.json({ ok: true });
@@ -1121,11 +1165,17 @@ function buildPrompt({ skillInstructions, matter, section, uploadedDocuments, me
         (anyCitationUrls
           ? `\n\nCITATION LINKING: whenever your output cites, quotes, or relies on one of these ` +
             `documents, hyperlink the citation phrase itself -- the document/exhibit reference, ` +
-            `e.g. "[Supply Agreement, Clause 11.2](citation-url)" -- using that document's ` +
-            `Citation URL in markdown link syntax. Link only the minimal citing phrase, never a ` +
-            `whole sentence. Applies in BOTH the clean draft and the working notes (including ` +
-            `inside table cells). Never invent a URL: only use the Citation URLs listed above, ` +
-            `and leave citations to documents without a Citation URL unlinked.`
+            `e.g. "[Supply Agreement, Clause 11.2](citation-url/view#q=...)" -- using that ` +
+            `document's Citation URL in markdown link syntax, with "/view" appended and then a ` +
+            `fragment "#q=" followed by the URL-encoded supporting passage: the EXACT text from ` +
+            `the document that supports the citation, copied verbatim (max 200 characters -- if ` +
+            `the passage is longer, use its first sentence or clause). The viewer highlights that ` +
+            `passage for the reader, so verbatim accuracy matters; if you cannot quote verbatim, ` +
+            `omit the "#q=" part and link to citation-url/view alone. Link only the minimal ` +
+            `citing phrase, never a whole sentence. Applies in BOTH the clean draft and the ` +
+            `working notes (including inside table cells). Never invent a URL: only use the ` +
+            `Citation URLs listed above, and leave citations to documents without a Citation URL ` +
+            `unlinked.`
           : "")
     );
   } else {
@@ -1155,7 +1205,10 @@ function buildPrompt({ skillInstructions, matter, section, uploadedDocuments, me
         `<clean_draft>\n` +
         `Only the insert-ready draft text -- the numbered clauses / narrative the Skill's output ` +
         `describes. No gap reports, no checklists, no commentary, no process headings, no ` +
-        `explanations of what you did.\n` +
+        `explanations of what you did. Write it as PLAIN TEXT exactly as it should read in the ` +
+        `pleading: no markdown symbols (no #, no ** or * emphasis markers, no backticks, no ` +
+        `bullet markers) -- the ONLY markdown permitted in this channel is citation links ` +
+        `[phrase](url) where citation linking applies.\n` +
         `</clean_draft>\n\n` +
         `<working_notes>\n` +
         `Everything else the Skill's Output Package calls for: gap reports, verification ` +
