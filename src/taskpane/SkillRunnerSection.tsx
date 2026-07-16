@@ -7,6 +7,7 @@ import { useSkillCoach, CATEGORY_LABELS } from "./hooks/useSkillCoach";
 import { DOCUMENT_ROLES, UploadJob } from "./hooks/useDocumentUploads";
 import { insertTextAtSectionEnd, insertTextAtCursor } from "./office/insertContent";
 import { openDocxInNewWindow } from "./office/openDocx";
+import { logEditPair } from "./editPairLog";
 import UploadProgress from "./UploadProgress";
 
 interface RunMeta {
@@ -149,6 +150,20 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
         setInsertTarget("at the cursor position");
       }
       setInsertState("done");
+
+      // Corpus capture: the model's draft vs. what actually went into the
+      // pleading. Fire-and-forget -- never blocks or fails the insert.
+      if (output !== null) {
+        logEditPair({
+          skillId: lastRunMeta ? lastRunMeta.skillId : null,
+          skillName: lastRunMeta ? lastRunMeta.skillName : null,
+          matterId: lastRunMeta ? lastRunMeta.matterId : null,
+          sectionId: activeSection ? activeSection.sectionId : null,
+          insertTarget: activeSection ? "section_end" : "cursor",
+          modelDraft: output,
+          finalText: editedOutput,
+        });
+      }
     } catch (err) {
       setInsertError(err instanceof Error ? err.message : "Unknown error inserting into document.");
       setInsertState("error");

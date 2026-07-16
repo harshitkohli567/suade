@@ -76,6 +76,17 @@ const RUN_TTL_MS = 30 * 60 * 1000; // stale runs get swept so this doesn't grow 
 // output, for which matter, when. JSONL, appended on each completed run.
 const SKILL_RUNS_LOG_PATH = path.join(__dirname, "skill-runs.log");
 
+/**
+ * Edit-pair corpus: (model draft -> what the lawyer actually inserted),
+ * captured at Insert time. This is the raw material for future style
+ * learning (few-shot retrieval over past edits, and any eventual
+ * fine-tuning decision) -- it only accumulates forward, so it's captured
+ * from day one even though nothing consumes it yet. On Render, point
+ * SUADE_EDIT_PAIRS_PATH at the persistent disk (e.g.
+ * /var/data/edit-pairs.log) or the corpus is wiped on each redeploy.
+ */
+const EDIT_PAIRS_LOG_PATH = process.env.SUADE_EDIT_PAIRS_PATH || path.join(__dirname, "edit-pairs.log");
+
 // Per-lawyer personal Skill copies + their version history (Skill Coach).
 const PERSONAL_SKILLS_DIR = path.join(__dirname, "skills", "personal");
 const SKILL_ID_RE = /^[a-z0-9-]+$/;
@@ -728,6 +739,38 @@ async function executeSkillRun(runId, { skillId, skillInstructions, matter, sect
     }
   }
 }
+
+app.post("/api/edit-pairs", (req, res) => {
+  try {
+    const { lawyerId, skillId, skillName, matterId, sectionId, insertTarget, modelDraft, finalText } = req.body;
+
+    if (typeof modelDraft !== "string" || typeof finalText !== "string" || !finalText.trim()) {
+      return res.status(400).json({ error: "modelDraft and finalText are required." });
+    }
+
+    const entry = {
+      editPairId: `ep-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      lawyerId: lawyerId || null,
+      skillId: skillId || null,
+      skillName: skillName || null,
+      matterId: matterId || null,
+      sectionId: sectionId || null,
+      insertTarget: insertTarget || null,
+      modelDraft,
+      finalText,
+      // Unedited acceptances are logged too -- "the lawyer changed nothing"
+      // is itself a strong positive signal about the draft.
+      edited: modelDraft !== finalText,
+      createdAt: new Date().toISOString(),
+    };
+
+    fs.appendFileSync(EDIT_PAIRS_LOG_PATH, `${JSON.stringify(entry)}\n`);
+    res.json({ ok: true, editPairId: entry.editPairId });
+  } catch (err) {
+    console.error("Suade edit-pair log error:", err);
+    res.status(500).json({ error: err.message || "Unknown error logging edit pair." });
+  }
+});
 
 app.post("/api/skill-feedback", (req, res) => {
   try {
