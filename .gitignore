@@ -6,3 +6,4 @@ dist/
 .env.local
 skills/personal/
 matters-extra.json
+uploads/

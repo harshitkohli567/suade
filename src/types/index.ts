@@ -42,6 +42,13 @@ export interface UploadedDocumentRecord {
   matterId: string;
   /** Opaque reference returned by Claude's native file-upload capability. Suade never stores file content itself (FR-10.2). */
   claudeFileReference: string;
+  /**
+   * Unguessable token + URL of the backend-hosted copy of the ORIGINAL
+   * file, used as the target for citation hyperlinks in Skill output.
+   * Null for documents uploaded before hosting existed.
+   */
+  documentToken: string | null;
+  documentUrl: string | null;
   filename: string;
   fileType: "pdf" | "docx" | "msg";
   documentRole: DocumentRole;

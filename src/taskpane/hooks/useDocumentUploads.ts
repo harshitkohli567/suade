@@ -125,12 +125,18 @@ export function useDocumentUploads() {
         );
       }
 
-      const data = (await response.json()) as { fileId: string };
+      const data = (await response.json()) as {
+        fileId: string;
+        documentToken?: string;
+        documentUrl?: string;
+      };
 
       const record: UploadedDocumentRecord = {
         documentId: `doc-${crypto.randomUUID()}`,
         matterId,
         claudeFileReference: data.fileId,
+        documentToken: data.documentToken ?? null,
+        documentUrl: data.documentUrl ?? null,
         filename: file.name,
         fileType: inferFileType(file.name),
         documentRole,
@@ -177,9 +183,10 @@ export function useDocumentUploads() {
     setRemovingDocumentIds((prev) => [...prev, documentId]);
 
     try {
-      const response = await fetch(`${BACKEND_URL}/api/upload-document/${doc.claudeFileReference}`, {
-        method: "DELETE",
-      });
+      const deleteUrl =
+        `${BACKEND_URL}/api/upload-document/${doc.claudeFileReference}` +
+        (doc.documentToken ? `?docToken=${encodeURIComponent(doc.documentToken)}` : "");
+      const response = await fetch(deleteUrl, { method: "DELETE" });
 
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));

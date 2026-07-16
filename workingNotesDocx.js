@@ -22,34 +22,70 @@ const {
   TableCell,
   WidthType,
   VerticalAlign,
+  ExternalHyperlink,
 } = require("docx");
 
 const NUMBERING_REF = "working-notes-numbered";
 
-/** `**bold**`, `*italic*`, and `code` spans -> styled TextRuns. */
-function parseInlineRuns(text) {
+const MD_LINK_RE = /\[([^\]]+)\]\(([^)\s]+)\)/g;
+
+/**
+ * `[text](url)` -> real Word hyperlinks; `**bold**`, `*italic*`, and
+ * `code` spans -> styled TextRuns. runOptions (size, bold) apply to every
+ * run so table cells can reuse this at their smaller font.
+ */
+function parseInlineRuns(text, runOptions = {}) {
   const runs = [];
-  const tokenRe = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g;
+
+  const pushPlainSegment = (segment) => {
+    const tokenRe = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g;
+    let last = 0;
+    let match;
+    while ((match = tokenRe.exec(segment))) {
+      if (match.index > last) {
+        runs.push(new TextRun({ ...runOptions, text: segment.slice(last, match.index) }));
+      }
+      const token = match[0];
+      if (token.startsWith("**")) {
+        runs.push(new TextRun({ ...runOptions, text: token.slice(2, -2), bold: true }));
+      } else if (token.startsWith("`")) {
+        runs.push(new TextRun({ ...runOptions, text: token.slice(1, -1), font: "Consolas" }));
+      } else {
+        runs.push(new TextRun({ ...runOptions, text: token.slice(1, -1), italics: true }));
+      }
+      last = match.index + token.length;
+    }
+    if (last < segment.length) {
+      runs.push(new TextRun({ ...runOptions, text: segment.slice(last) }));
+    }
+  };
+
   let last = 0;
   let match;
-  while ((match = tokenRe.exec(text))) {
+  const linkRe = new RegExp(MD_LINK_RE.source, "g");
+  while ((match = linkRe.exec(text))) {
     if (match.index > last) {
-      runs.push(new TextRun(text.slice(last, match.index)));
+      pushPlainSegment(text.slice(last, match.index));
     }
-    const token = match[0];
-    if (token.startsWith("**")) {
-      runs.push(new TextRun({ text: token.slice(2, -2), bold: true }));
-    } else if (token.startsWith("`")) {
-      runs.push(new TextRun({ text: token.slice(1, -1), font: "Consolas" }));
-    } else {
-      runs.push(new TextRun({ text: token.slice(1, -1), italics: true }));
-    }
-    last = match.index + token.length;
+    runs.push(
+      new ExternalHyperlink({
+        link: match[2],
+        children: [
+          new TextRun({
+            ...runOptions,
+            text: match[1].replace(/\*\*/g, "").replace(/`/g, ""),
+            style: "Hyperlink",
+          }),
+        ],
+      })
+    );
+    last = match.index + match[0].length;
   }
   if (last < text.length) {
-    runs.push(new TextRun(text.slice(last)));
+    pushPlainSegment(text.slice(last));
   }
-  return runs.length > 0 ? runs : [new TextRun("")];
+
+  return runs.length > 0 ? runs : [new TextRun({ ...runOptions, text: "" })];
 }
 
 const HEADING_LEVELS = [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3];
@@ -92,13 +128,8 @@ function buildTable(tableLines) {
       margins: { top: 40, bottom: 40, left: 80, right: 80 },
       children: [
         new Paragraph({
-          children: [
-            new TextRun({
-              text: text.replace(/\*\*/g, "").replace(/`/g, ""),
-              bold: isHeader,
-              size: 18, // 9pt -- keeps wide matrices readable on the page
-            }),
-          ],
+          // 9pt keeps wide matrices readable; citation links inside cells stay live.
+          children: parseInlineRuns(text, { size: 18, bold: isHeader }),
         }),
       ],
     });

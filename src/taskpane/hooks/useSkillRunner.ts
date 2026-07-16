@@ -76,6 +76,7 @@ export function useSkillRunner() {
             filename: d.filename,
             documentRole: d.documentRole,
             fileId: d.claudeFileReference,
+            documentUrl: d.documentUrl,
           })),
           message: args.message,
           lawyerId: LAWYER_ID,

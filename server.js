@@ -87,6 +87,10 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "25mb" }));
 
+// Behind Render's proxy, req.protocol needs the forwarded header to
+// report https -- citation URLs must be absolute and correct.
+app.set("trust proxy", true);
+
 if (IS_PRODUCTION) {
   // In production this same server also serves the built task pane
   // (npm run build's dist/ output) so the whole add-in is one deployable
@@ -130,6 +134,35 @@ setInterval(() => {
 
 const DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const MSG_MIME_TYPE = "application/vnd.ms-outlook";
+
+/**
+ * Hosted copies of uploaded documents, so citations in Skill output can
+ * hyperlink to the actual source file. The ORIGINAL bytes are kept (the
+ * PDF/DOCX/MSG the lawyer uploaded), not the text extraction Claude
+ * reads. URLs use an unguessable token (private-link model -- anyone
+ * with the exact link can open it; there is no login).
+ *
+ * On Render, set SUADE_UPLOADS_DIR to a path on a persistent disk
+ * (e.g. /var/data/uploads) -- without one, hosted files (and therefore
+ * citation links embedded in documents) die on every redeploy.
+ */
+const UPLOADS_DIR = process.env.SUADE_UPLOADS_DIR || path.join(__dirname, "uploads");
+fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+const DOC_TOKEN_RE = /^doc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function storeHostedDocument(buffer, filename, mimeType) {
+  const token = `doc-${require("crypto").randomUUID()}`;
+  fs.writeFileSync(path.join(UPLOADS_DIR, token), buffer);
+  fs.writeFileSync(
+    path.join(UPLOADS_DIR, `${token}.json`),
+    JSON.stringify({ filename, mimeType, uploadedAt: new Date().toISOString() })
+  );
+  return token;
+}
+
+function documentUrlFor(req, token) {
+  return `${req.protocol}://${req.get("host")}/api/documents/${token}`;
+}
 
 /**
  * Outlook .msg -> plaintext. Same reasoning as the DOCX path: Anthropic's
@@ -229,11 +262,16 @@ app.post("/api/upload-document", async (req, res) => {
       betas: [FILES_API_BETA],
     });
 
+    // Host the ORIGINAL file (not the extraction) for citation links.
+    const documentToken = storeHostedDocument(buffer, filename, mimeType);
+
     res.json({
       fileId: uploaded.id,
       filename: uploaded.filename,
       mimeType: uploaded.mime_type,
       sizeBytes: uploaded.size_bytes,
+      documentToken,
+      documentUrl: documentUrlFor(req, documentToken),
     });
   } catch (err) {
     console.error("Suade backend upload error:", err);
@@ -241,9 +279,36 @@ app.post("/api/upload-document", async (req, res) => {
   }
 });
 
+app.get("/api/documents/:token", (req, res) => {
+  const { token } = req.params;
+  if (!DOC_TOKEN_RE.test(token)) {
+    return res.status(400).json({ error: "Invalid document token." });
+  }
+
+  const filePath = path.join(UPLOADS_DIR, token);
+  const metaPath = path.join(UPLOADS_DIR, `${token}.json`);
+  if (!fs.existsSync(filePath) || !fs.existsSync(metaPath)) {
+    return res.status(404).json({ error: "Document not found -- it may have been removed." });
+  }
+
+  const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+  res.setHeader("Content-Type", meta.mimeType || "application/octet-stream");
+  // inline lets browsers render PDFs directly; non-renderable types download.
+  res.setHeader("Content-Disposition", `inline; filename="${(meta.filename || token).replace(/"/g, "")}"`);
+  res.sendFile(filePath);
+});
+
 app.delete("/api/upload-document/:fileId", async (req, res) => {
   try {
     await anthropic.beta.files.delete(req.params.fileId, { betas: [FILES_API_BETA] });
+
+    // Also remove the hosted copy so its citation link stops resolving.
+    const docToken = req.query.docToken;
+    if (typeof docToken === "string" && DOC_TOKEN_RE.test(docToken)) {
+      fs.rmSync(path.join(UPLOADS_DIR, docToken), { force: true });
+      fs.rmSync(path.join(UPLOADS_DIR, `${docToken}.json`), { force: true });
+    }
+
     res.json({ ok: true });
   } catch (err) {
     // Anthropic 404s if the file is already gone -- treat that as success
@@ -1043,13 +1108,26 @@ function buildPrompt({ skillInstructions, matter, section, uploadedDocuments, me
 
   if (uploadedDocuments && uploadedDocuments.length > 0) {
     const list = uploadedDocuments
-      .map((d) =>
-        d.fileId
+      .map((d) => {
+        const base = d.fileId
           ? `- ${d.filename} (role: ${d.documentRole}) -- attached below as an actual document; its content IS available to you.`
-          : `- ${d.filename} (role: ${d.documentRole}) -- NOTE: no file attached (legacy mock reference). Content is NOT available. Do not assume or invent its contents.`
-      )
+          : `- ${d.filename} (role: ${d.documentRole}) -- NOTE: no file attached (legacy mock reference). Content is NOT available. Do not assume or invent its contents.`;
+        return d.documentUrl ? `${base} Citation URL: ${d.documentUrl}` : base;
+      })
       .join("\n");
-    parts.push(`# Uploaded Documents\n\n${list}`);
+    const anyCitationUrls = uploadedDocuments.some((d) => d.documentUrl);
+    parts.push(
+      `# Uploaded Documents\n\n${list}` +
+        (anyCitationUrls
+          ? `\n\nCITATION LINKING: whenever your output cites, quotes, or relies on one of these ` +
+            `documents, hyperlink the citation phrase itself -- the document/exhibit reference, ` +
+            `e.g. "[Supply Agreement, Clause 11.2](citation-url)" -- using that document's ` +
+            `Citation URL in markdown link syntax. Link only the minimal citing phrase, never a ` +
+            `whole sentence. Applies in BOTH the clean draft and the working notes (including ` +
+            `inside table cells). Never invent a URL: only use the Citation URLs listed above, ` +
+            `and leave citations to documents without a Citation URL unlinked.`
+          : "")
+    );
   } else {
     parts.push(`# Uploaded Documents\n\nNone uploaded for this matter.`);
   }

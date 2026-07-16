@@ -26,6 +26,41 @@ function splitIntoParagraphBlocks(text: string): string[] {
     .filter((block) => block.length > 0);
 }
 
+const MD_LINK_RE = /\[([^\]]+)\]\(([^)\s]+)\)/;
+
+function escapeHtml(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function blocksToHtml(text: string): string {
+  return splitIntoParagraphBlocks(text)
+    .map((block) => {
+      const withLinks = escapeHtml(block).replace(
+        new RegExp(MD_LINK_RE.source, "g"),
+        (_match, label, url) => `<a href="${url}">${label}</a>`
+      );
+      return `<p>${withLinks}</p>`;
+    })
+    .join("");
+}
+
+/**
+ * Drafts containing markdown citation links go in as HTML so the links
+ * become real Word hyperlinks; link-free drafts keep the original
+ * insertParagraph path, which inherits surrounding formatting more
+ * faithfully than HTML insertion does.
+ */
+function insertBlocksAfterParagraph(paragraph: Word.Paragraph, text: string): void {
+  if (MD_LINK_RE.test(text)) {
+    paragraph.getRange(Word.RangeLocation.whole).insertHtml(blocksToHtml(text), Word.InsertLocation.after);
+    return;
+  }
+  let insertAfter = paragraph;
+  for (const block of splitIntoParagraphBlocks(text)) {
+    insertAfter = insertAfter.insertParagraph(block, Word.InsertLocation.after);
+  }
+}
+
 export async function insertTextAtSectionEnd(section: DocumentSection, text: string): Promise<void> {
   return Word.run(async (context) => {
     context.document.load("changeTrackingMode");
@@ -42,12 +77,7 @@ export async function insertTextAtSectionEnd(section: DocumentSection, text: str
     context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
     await context.sync();
 
-    const blocks = splitIntoParagraphBlocks(text);
-
-    let insertAfter = paragraphs.items[endIndex];
-    for (const block of blocks) {
-      insertAfter = insertAfter.insertParagraph(block, Word.InsertLocation.after);
-    }
+    insertBlocksAfterParagraph(paragraphs.items[endIndex], text);
 
     await context.sync();
 
@@ -77,12 +107,7 @@ export async function insertTextAtCursor(text: string): Promise<void> {
     context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
     await context.sync();
 
-    const blocks = splitIntoParagraphBlocks(text);
-
-    let insertAfter = selectionParagraphs.items[selectionParagraphs.items.length - 1];
-    for (const block of blocks) {
-      insertAfter = insertAfter.insertParagraph(block, Word.InsertLocation.after);
-    }
+    insertBlocksAfterParagraph(selectionParagraphs.items[selectionParagraphs.items.length - 1], text);
 
     await context.sync();
 
