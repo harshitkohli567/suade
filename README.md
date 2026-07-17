@@ -1,9 +1,9 @@
 # Suade — Word Add-in (Phase 1 scaffold)
 
-Contextually-aware, point-of-work AI for arbitration lawyers. See the PRD
-for full product context. This is Phase 1, Step 1: the project shape only —
-a Word task pane that proves it loads correctly. No cursor tracking, no
-Skills, no Claude calls yet.
+Contextually-aware, point-of-work AI for arbitration lawyers. See
+[PRD.md](PRD.md) for full product context and current capabilities —
+the sections below describing "Phase 1, Step 1" reflect the original
+scaffold and are kept for the local-dev instructions, which still apply.
 
 ## Prerequisites
 
