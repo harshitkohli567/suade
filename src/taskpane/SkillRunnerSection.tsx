@@ -59,7 +59,7 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
   const [selectedSkillId, setSelectedSkillId] = useState("");
   const [uploadRole, setUploadRole] = useState<DocumentRole>("exhibit");
   const [message, setMessage] = useState("");
-  const { run, output, workingNotes, loading, error, trace } = useSkillRunner();
+  const { run, output, workingNotes, loading, error, trace, reset: resetRun } = useSkillRunner();
   const feedback = useSkillFeedback();
   const skillCoach = useSkillCoach();
   const editPairSweep = useEditPairSweep();
@@ -183,10 +183,16 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
     }
   };
 
+  /** Fully clears the previous run so the pane returns to its pre-run state. */
   const handleDiscard = () => {
     setEditedOutput("");
     setInsertState("idle");
     setInsertError(null);
+    setInsertTarget(null);
+    setNotesOpenState("idle");
+    setNotesOpenError(null);
+    feedback.reset();
+    resetRun();
   };
 
   const handleOpenNotes = async () => {
@@ -494,7 +500,7 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
               {insertState === "inserting" ? "Inserting…" : "Insert into Document"}
             </button>
             <button style={styles.discardButton} onClick={handleDiscard}>
-              Discard
+              Clear output
             </button>
           </div>
 
