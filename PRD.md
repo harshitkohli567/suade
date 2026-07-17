@@ -91,7 +91,7 @@ Node/Express backend (server.js)
 - Thumbs up/down on output, logged with the run's actual context (skill, matter, section, document IDs). [Built]
 - Minimal Activity Graph: every completed run logged (runId, skill, matter, timestamp, both channels). [Built]
 - **FR-17 Edit-pair corpus:** at Insert, log (model draft → text actually inserted) with metadata; unedited acceptance is itself signal. Nothing consumes the corpus yet — it exists because it can't be backfilled. [Built]
-- **FR-17b Post-insert capture:** because the observed real workflow is *"insert first, edit in Word"*, inserted drafts are wrapped in hidden, tagged content controls; the pane periodically re-reads them and appends `final-update` snapshots (last snapshot wins). Backend endpoint and content-control wrapping are in the working tree; the periodic sweep and wiring remain. **[In progress]**
+- **FR-17b Post-insert capture:** because the observed real workflow is *"insert first, edit in Word"*, inserted drafts are wrapped in hidden, tagged content controls; the pane re-reads them (every 60s while open, plus before each run) using the tracked-changes-accepted view of the text, and appends `final-update` snapshots when a draft changed — last snapshot wins downstream. Emptied/deleted drafts are skipped, never logged as empty finals. **[Built]** *(content-control + reviewed-text behavior pending live-Word verification, per §8)*
 
 ### 4.10 Operations & UX chrome — [Built]
 Backend health endpoint + status dot with actionable message; document-context error surfacing; collapsible cards throughout; friendly error copy everywhere a raw API error could leak.
@@ -142,7 +142,7 @@ Scanned/image-only PDFs can't be quote-highlighted (banner explains; no OCR). `.
 
 Framed by the **memory hierarchy**: Skills answer *what should be done*, retrieval answers *what is true*, weights answer *how it should sound*. Route lawyer input to the most auditable tier that works.
 
-1. **Now:** finish FR-17b post-insert capture; attach the Render disk.
+1. **Now:** attach the Render persistent disk (§6).
 2. **Next — retrieval tier:** Firm Precedent Library (past pleadings, model clauses; lexical retrieval first, embeddings swappable later) injected per-run with citation URLs, fully traced. Per-matter documents stay fully attached until size forces selectivity.
 3. **Skill promotion:** review flow elevating personal Skill edits into firm defaults — turns the per-lawyer flywheel institutional.
 4. **Structural tier, cheap first:** few-shot retrieval over the edit-pair corpus (teach style like a LoRA would — zero training, fully auditable). The memory router (Skill Coach generalized to route context/retrieval/corpus) follows.

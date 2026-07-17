@@ -740,16 +740,26 @@ async function executeSkillRun(runId, { skillId, skillInstructions, matter, sect
   }
 }
 
+const EDIT_PAIR_ID_RE = /^ep-[A-Za-z0-9-]{6,64}$/;
+
 app.post("/api/edit-pairs", (req, res) => {
   try {
-    const { lawyerId, skillId, skillName, matterId, sectionId, insertTarget, modelDraft, finalText } = req.body;
+    const { editPairId, lawyerId, skillId, skillName, matterId, sectionId, insertTarget, modelDraft, finalText } =
+      req.body;
 
     if (typeof modelDraft !== "string" || typeof finalText !== "string" || !finalText.trim()) {
       return res.status(400).json({ error: "modelDraft and finalText are required." });
     }
 
     const entry = {
-      editPairId: `ep-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type: "insert",
+      // Client-generated id: it doubles as the tag of the content control
+      // wrapping the inserted text in the Word document, which is how
+      // later post-insert edits get matched back to this pair.
+      editPairId:
+        typeof editPairId === "string" && EDIT_PAIR_ID_RE.test(editPairId)
+          ? editPairId
+          : `ep-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       lawyerId: lawyerId || null,
       skillId: skillId || null,
       skillName: skillName || null,
@@ -769,6 +779,38 @@ app.post("/api/edit-pairs", (req, res) => {
   } catch (err) {
     console.error("Suade edit-pair log error:", err);
     res.status(500).json({ error: err.message || "Unknown error logging edit pair." });
+  }
+});
+
+/**
+ * Post-insert snapshots: the task pane periodically re-reads each
+ * inserted draft's content control from the Word document and reports
+ * the current text when it changed. Append-only; consumers take the
+ * LAST final-update per editPairId (falling back to the insert-time
+ * finalText when none exists).
+ */
+app.post("/api/edit-pairs/update", (req, res) => {
+  try {
+    const { editPairId, finalText } = req.body;
+
+    if (typeof editPairId !== "string" || !EDIT_PAIR_ID_RE.test(editPairId)) {
+      return res.status(400).json({ error: "A valid editPairId is required." });
+    }
+    if (typeof finalText !== "string" || !finalText.trim()) {
+      return res.status(400).json({ error: "finalText is required." });
+    }
+
+    const entry = {
+      type: "final-update",
+      editPairId,
+      finalText,
+      capturedAt: new Date().toISOString(),
+    };
+    fs.appendFileSync(EDIT_PAIRS_LOG_PATH, `${JSON.stringify(entry)}\n`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Suade edit-pair update error:", err);
+    res.status(500).json({ error: err.message || "Unknown error logging edit-pair update." });
   }
 });
 

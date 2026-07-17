@@ -7,6 +7,8 @@ import { BACKEND_URL, LAWYER_ID } from "./config";
  * the insert -- it just logs to the console and moves on.
  */
 export interface EditPairArgs {
+  /** Client-generated; doubles as the content-control tag suffix in the document. */
+  editPairId: string;
   skillId: string | null;
   skillName: string | null;
   matterId: string | null;
@@ -14,6 +16,10 @@ export interface EditPairArgs {
   insertTarget: "section_end" | "cursor";
   modelDraft: string;
   finalText: string;
+}
+
+export function newEditPairId(): string {
+  return `ep-${crypto.randomUUID()}`;
 }
 
 export function logEditPair(args: EditPairArgs): void {
@@ -29,5 +35,22 @@ export function logEditPair(args: EditPairArgs): void {
     })
     .catch((err) => {
       console.warn("Edit-pair logging failed -- insert unaffected:", err);
+    });
+}
+
+/** Post-insert snapshot: the draft's current text in the document, after Word edits. */
+export function logEditPairUpdate(editPairId: string, finalText: string): void {
+  void fetch(`${BACKEND_URL}/api/edit-pairs/update`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ editPairId, finalText }),
+  })
+    .then((response) => {
+      if (!response.ok) {
+        console.warn(`Edit-pair update failed (HTTP ${response.status}).`);
+      }
+    })
+    .catch((err) => {
+      console.warn("Edit-pair update failed:", err);
     });
 }

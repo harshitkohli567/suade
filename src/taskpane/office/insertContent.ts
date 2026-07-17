@@ -78,25 +78,56 @@ function blocksToHtml(text: string): string {
     .join("");
 }
 
+/** Content controls wrapping inserted drafts carry this tag prefix + the editPairId. */
+export const EDIT_PAIR_TAG_PREFIX = "suade-ep-";
+
 /**
  * Drafts containing any markdown construct go in as HTML, so formatting
  * renders as intended (hyperlinks, bold, lists) and no literal markdown
  * symbols land in the pleading. Fully plain drafts keep the original
  * insertParagraph path, which inherits surrounding formatting more
  * faithfully than HTML insertion does.
+ *
+ * The inserted content is wrapped in an invisible (appearance: Hidden)
+ * content control tagged with the run's editPairId, so the task pane can
+ * find this exact text later -- however much the document around it has
+ * changed -- and capture the lawyer's post-insert edits.
  */
-function insertBlocksAfterParagraph(paragraph: Word.Paragraph, text: string): void {
+function insertBlocksAfterParagraph(paragraph: Word.Paragraph, text: string, editPairId: string | null): void {
+  let insertedRange: Word.Range;
+
   if (MD_ARTIFACT_RE.test(text)) {
-    paragraph.getRange(Word.RangeLocation.whole).insertHtml(blocksToHtml(text), Word.InsertLocation.after);
-    return;
+    insertedRange = paragraph
+      .getRange(Word.RangeLocation.whole)
+      .insertHtml(blocksToHtml(text), Word.InsertLocation.after);
+  } else {
+    let firstInserted: Word.Paragraph | null = null;
+    let insertAfter = paragraph;
+    for (const block of splitIntoParagraphBlocks(text)) {
+      insertAfter = insertAfter.insertParagraph(block.replace(/\s*\n\s*/g, " "), Word.InsertLocation.after);
+      if (!firstInserted) firstInserted = insertAfter;
+    }
+    if (!firstInserted) return;
+    insertedRange = firstInserted
+      .getRange(Word.RangeLocation.whole)
+      .expandTo(insertAfter.getRange(Word.RangeLocation.whole));
   }
-  let insertAfter = paragraph;
-  for (const block of splitIntoParagraphBlocks(text)) {
-    insertAfter = insertAfter.insertParagraph(block.replace(/\s*\n\s*/g, " "), Word.InsertLocation.after);
+
+  if (editPairId) {
+    const control = insertedRange.insertContentControl();
+    control.tag = `${EDIT_PAIR_TAG_PREFIX}${editPairId}`;
+    control.title = "Suade draft";
+    control.appearance = Word.ContentControlAppearance.hidden;
+    control.cannotDelete = false;
+    control.cannotEdit = false;
   }
 }
 
-export async function insertTextAtSectionEnd(section: DocumentSection, text: string): Promise<void> {
+export async function insertTextAtSectionEnd(
+  section: DocumentSection,
+  text: string,
+  editPairId: string | null = null
+): Promise<void> {
   return Word.run(async (context) => {
     context.document.load("changeTrackingMode");
     const paragraphs = context.document.body.paragraphs;
@@ -112,7 +143,7 @@ export async function insertTextAtSectionEnd(section: DocumentSection, text: str
     context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
     await context.sync();
 
-    insertBlocksAfterParagraph(paragraphs.items[endIndex], text);
+    insertBlocksAfterParagraph(paragraphs.items[endIndex], text, editPairId);
 
     await context.sync();
 
@@ -127,7 +158,7 @@ export async function insertTextAtSectionEnd(section: DocumentSection, text: str
  * Paragraphs land after the paragraph the cursor sits in, as tracked
  * changes, using the same paragraph-splitting as section insertion.
  */
-export async function insertTextAtCursor(text: string): Promise<void> {
+export async function insertTextAtCursor(text: string, editPairId: string | null = null): Promise<void> {
   return Word.run(async (context) => {
     context.document.load("changeTrackingMode");
     const selectionParagraphs = context.document.getSelection().paragraphs;
@@ -142,7 +173,7 @@ export async function insertTextAtCursor(text: string): Promise<void> {
     context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
     await context.sync();
 
-    insertBlocksAfterParagraph(selectionParagraphs.items[selectionParagraphs.items.length - 1], text);
+    insertBlocksAfterParagraph(selectionParagraphs.items[selectionParagraphs.items.length - 1], text, editPairId);
 
     await context.sync();
 

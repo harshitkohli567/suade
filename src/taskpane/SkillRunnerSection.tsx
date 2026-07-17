@@ -7,7 +7,8 @@ import { useSkillCoach, CATEGORY_LABELS } from "./hooks/useSkillCoach";
 import { DOCUMENT_ROLES, UploadJob } from "./hooks/useDocumentUploads";
 import { insertTextAtSectionEnd, insertTextAtCursor } from "./office/insertContent";
 import { openDocxInNewWindow } from "./office/openDocx";
-import { logEditPair } from "./editPairLog";
+import { logEditPair, newEditPairId } from "./editPairLog";
+import { useEditPairSweep } from "./hooks/useEditPairSweep";
 import UploadProgress from "./UploadProgress";
 
 interface RunMeta {
@@ -61,6 +62,7 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
   const { run, output, workingNotes, loading, error, trace } = useSkillRunner();
   const feedback = useSkillFeedback();
   const skillCoach = useSkillCoach();
+  const editPairSweep = useEditPairSweep();
 
   const [editedOutput, setEditedOutput] = useState("");
   const [insertState, setInsertState] = useState<"idle" | "inserting" | "done" | "error">("idle");
@@ -104,6 +106,10 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
   const selectedSkill = SKILL_REGISTRY.find((s) => s.skillId === selectedSkillId) ?? null;
 
   const handleRun = () => {
+    // Snapshot any edits made in Word since the last sweep before the
+    // next run changes what's on screen. Fire-and-forget.
+    void editPairSweep.sweepNow();
+
     // Skill Coach: classify the follow-up against the PRIOR Skill output,
     // in parallel -- never delays or blocks the message's own run.
     const trimmedMessage = message.trim();
@@ -140,13 +146,18 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
     setInsertState("inserting");
     setInsertError(null);
     try {
+      // The id ties three things together: the corpus entry, the hidden
+      // content control wrapping the inserted text, and every later
+      // post-insert snapshot of that text.
+      const editPairId = newEditPairId();
+
       // Section end when we know where we are; cursor fallback otherwise
       // (e.g. a blank document during intake has no sections yet).
       if (activeSection) {
-        await insertTextAtSectionEnd(activeSection, editedOutput);
+        await insertTextAtSectionEnd(activeSection, editedOutput, editPairId);
         setInsertTarget(`at the end of section ${activeSection.sectionId}`);
       } else {
-        await insertTextAtCursor(editedOutput);
+        await insertTextAtCursor(editedOutput, editPairId);
         setInsertTarget("at the cursor position");
       }
       setInsertState("done");
@@ -155,6 +166,7 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
       // pleading. Fire-and-forget -- never blocks or fails the insert.
       if (output !== null) {
         logEditPair({
+          editPairId,
           skillId: lastRunMeta ? lastRunMeta.skillId : null,
           skillName: lastRunMeta ? lastRunMeta.skillName : null,
           matterId: lastRunMeta ? lastRunMeta.matterId : null,
@@ -163,6 +175,7 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
           modelDraft: output,
           finalText: editedOutput,
         });
+        editPairSweep.primeBaseline(editPairId, editedOutput);
       }
     } catch (err) {
       setInsertError(err instanceof Error ? err.message : "Unknown error inserting into document.");
