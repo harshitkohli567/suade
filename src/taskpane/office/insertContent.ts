@@ -93,7 +93,12 @@ export const EDIT_PAIR_TAG_PREFIX = "suade-ep-";
  * find this exact text later -- however much the document around it has
  * changed -- and capture the lawyer's post-insert edits.
  */
-function insertBlocksAfterParagraph(paragraph: Word.Paragraph, text: string, editPairId: string | null): void {
+async function insertBlocksAfterParagraph(
+  context: Word.RequestContext,
+  paragraph: Word.Paragraph,
+  text: string,
+  editPairId: string | null
+): Promise<void> {
   let insertedRange: Word.Range;
 
   if (MD_ARTIFACT_RE.test(text)) {
@@ -111,6 +116,22 @@ function insertBlocksAfterParagraph(paragraph: Word.Paragraph, text: string, edi
     insertedRange = firstInserted
       .getRange(Word.RangeLocation.whole)
       .expandTo(insertAfter.getRange(Word.RangeLocation.whole));
+  }
+
+  // Justify prose paragraphs so inserted drafts have clean left/right
+  // edges, matching the norm for pleadings. List items are left alone --
+  // justification stretches short bullet lines into ugly gaps -- so we
+  // read isListItem first and skip anything Word treats as a list entry.
+  // (Literally-numbered clauses render as plain <p>, not Word lists, so
+  // they count as prose here; justify never stretches a paragraph's last
+  // line, so single-line clauses are visually unaffected either way.)
+  const insertedParagraphs = insertedRange.paragraphs;
+  insertedParagraphs.load("items/isListItem");
+  await context.sync();
+  for (const inserted of insertedParagraphs.items) {
+    if (!inserted.isListItem) {
+      inserted.alignment = Word.Alignment.justified;
+    }
   }
 
   if (editPairId) {
@@ -143,7 +164,7 @@ export async function insertTextAtSectionEnd(
     context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
     await context.sync();
 
-    insertBlocksAfterParagraph(paragraphs.items[endIndex], text, editPairId);
+    await insertBlocksAfterParagraph(context, paragraphs.items[endIndex], text, editPairId);
 
     await context.sync();
 
@@ -173,7 +194,12 @@ export async function insertTextAtCursor(text: string, editPairId: string | null
     context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
     await context.sync();
 
-    insertBlocksAfterParagraph(selectionParagraphs.items[selectionParagraphs.items.length - 1], text, editPairId);
+    await insertBlocksAfterParagraph(
+      context,
+      selectionParagraphs.items[selectionParagraphs.items.length - 1],
+      text,
+      editPairId
+    );
 
     await context.sync();
 
