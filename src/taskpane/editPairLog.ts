@@ -54,3 +54,37 @@ export function logEditPairUpdate(editPairId: string, finalText: string): void {
       console.warn("Edit-pair update failed:", err);
     });
 }
+
+/** The predicted rationale for a post-insert edit plus the lawyer's yes/no answer. */
+export interface EditRationaleSignalArgs {
+  editPairId: string;
+  sectionId: string | null;
+  skillId: string | null;
+  skillName: string | null;
+  matterId: string | null;
+  category: string;
+  subIntent: string | null;
+  predictedRationale: string;
+  question: string;
+  confidence: number;
+  answer: "yes" | "no";
+  diffSummary: { added: number; deleted: number; modified: number };
+  predictedAt: string;
+}
+
+/** Labeled ground-truth signal (fire-and-forget, like the other edit-pair logs). */
+export function logEditRationaleSignal(args: EditRationaleSignalArgs): void {
+  void fetch(`${BACKEND_URL}/api/edit-pairs/rationale`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(args),
+  })
+    .then((response) => {
+      if (!response.ok) {
+        console.warn(`Edit-rationale signal failed (HTTP ${response.status}).`);
+      }
+    })
+    .catch((err) => {
+      console.warn("Edit-rationale signal failed:", err);
+    });
+}

@@ -814,6 +814,64 @@ app.post("/api/edit-pairs/update", (req, res) => {
   }
 });
 
+/**
+ * Labeled ground-truth signal: the predicted rationale for a post-insert
+ * edit, plus the lawyer's yes/no confirmation. Append-only into the same
+ * corpus as the edit pairs -- this is the first labeled dataset tying a
+ * concrete edit to a confirmed reason. Capture only; nothing here mutates
+ * the document or any Skill.
+ */
+app.post("/api/edit-pairs/rationale", (req, res) => {
+  try {
+    const {
+      editPairId,
+      sectionId,
+      skillId,
+      skillName,
+      matterId,
+      category,
+      subIntent,
+      predictedRationale,
+      question,
+      confidence,
+      answer,
+      diffSummary,
+      predictedAt,
+    } = req.body;
+
+    if (typeof editPairId !== "string" || !EDIT_PAIR_ID_RE.test(editPairId)) {
+      return res.status(400).json({ error: "A valid editPairId is required." });
+    }
+    if (answer !== "yes" && answer !== "no") {
+      return res.status(400).json({ error: 'answer must be "yes" or "no".' });
+    }
+
+    const entry = {
+      type: "rationale-signal",
+      editPairId,
+      sectionId: sectionId || null,
+      skillId: skillId || null,
+      skillName: skillName || null,
+      matterId: matterId || null,
+      category: category || null,
+      subIntent: typeof subIntent === "string" ? subIntent : null,
+      taxonomyVersion: TAXONOMY_VERSION,
+      predictedRationale: typeof predictedRationale === "string" ? predictedRationale : null,
+      question: typeof question === "string" ? question : null,
+      confidence: Number.isFinite(Number(confidence)) ? Number(confidence) : null,
+      answer,
+      diffSummary: diffSummary && typeof diffSummary === "object" ? diffSummary : null,
+      predictedAt: predictedAt || null,
+      answeredAt: new Date().toISOString(),
+    };
+    fs.appendFileSync(EDIT_PAIRS_LOG_PATH, `${JSON.stringify(entry)}\n`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Suade edit-pair rationale error:", err);
+    res.status(500).json({ error: err.message || "Unknown error logging rationale signal." });
+  }
+});
+
 app.post("/api/skill-feedback", (req, res) => {
   try {
     const { vote, skillId, skillName, matterId, sectionId, documentIds } = req.body;
@@ -1095,6 +1153,172 @@ app.post("/api/skill-coach/classify", async (req, res) => {
   } catch (err) {
     console.error("Suade Skill Coach classify error:", err);
     res.status(500).json({ error: err.message || "Unknown classification error." });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Edit rationale: after Suade inserts a draft and the lawyer edits it, infer
+// WHY the edit was made and phrase it as a yes/no question the lawyer can
+// confirm. Same shape as Skill Coach classify -- tagged context in, strict
+// JSON out, safe fallback -- and synchronous, since a single section's
+// before/after is a small, bounded call.
+// ---------------------------------------------------------------------------
+
+// Attorney editing-intent taxonomy for arbitration statements of claim.
+// Flat primary-intent labels, each paired with the attorney's underlying
+// concern -- fed to the model so it classifies against real practitioner
+// intent, and used to sharpen the yes/no question. Source: "A taxonomy of
+// attorney editing intents." Bump TAXONOMY_VERSION on any label change so
+// the labeled corpus stays analyzable across revisions.
+const TAXONOMY_VERSION = "attorney-intents-v1";
+
+const EDIT_RATIONALE_TAXONOMY = {
+  jurisdiction:
+    "Establishing the tribunal's authority: existence, validity, scope, and applicability of the arbitration agreement; party consent; standing or entitlement to claim.",
+  procedural_compliance:
+    "Satisfying conditions precedent, notice/escalation requirements, applicable rules and procedural orders, and limitation/timeliness of filing; avoiding waiver or procedural default.",
+  claim_sufficiency:
+    "Making claims legally complete: selecting viable claims, completing every legal element, distinguishing duties and breaches, removing weak or duplicative claims, pleading facts rather than bare conclusions.",
+  case_theory:
+    "What the case is fundamentally about: the central wrong, the governing theory, advantageous characterization, and thematic coherence across sections.",
+  factual_accuracy:
+    "Correcting dates, amounts, actors, events, and attribution; correcting chronology; distinguishing fact from inference; removing factual overreach.",
+  evidentiary_support:
+    "Anchoring assertions in proof: citation fidelity, selecting the strongest source, identifying evidentiary gaps, authenticity and provenance.",
+  chronology: "Making temporal order intelligible and establishing what each party knew at the relevant time.",
+  causation:
+    "Connecting conduct to consequence and each breach to each loss: counterfactual, intervening causes, reliance and inducement.",
+  damages:
+    "Heads of loss, quantification methodology, avoiding double recovery, remoteness and foreseeability, mitigation, valuation date and assumptions, interest.",
+  defense_anticipation:
+    "Anticipating the strongest defense, adverse contractual language, unfavorable authority, and threshold objections; inoculating against predictable attacks.",
+  adverse_fact_management:
+    "Handling damaging facts fairly and avoiding impeachment material or inconsistency with the record.",
+  position_preservation:
+    "Avoiding unnecessary admissions or premature factual commitment; preserving alternative claims, amendment flexibility, and reserved rights.",
+  remedy_alignment: "Aligning requested relief with the tribunal's powers and making the prayer award-ready.",
+  credibility:
+    "Calibrating confidence to the evidence; removing exaggeration; demonstrating candor; advocacy rather than invective; ethical accuracy.",
+  cognitive_clarity:
+    "Managing the tribunal's attention: information hierarchy, reducing inferential distance, propositional headings, roadmaps, paragraph logic, making the award easier to write.",
+  materiality:
+    "Testing whether each passage earns its place: removing immaterial facts, cumulative support, and issue proliferation; economy and proportionality.",
+  internal_consistency:
+    "Cross-document, numerical, and terminology consistency; correct cross-references and citation integrity; relief aligned to pleaded claims.",
+  linguistic_precision:
+    "Actor/action clarity, modality (may/must/shall), quantifiers, removing syntactic ambiguity, tracking operative contractual language.",
+  confidentiality: "Handling redactions, confidentiality designations, personal data, and privilege correctly.",
+  enforcement:
+    "Framing the claim so the tribunal acts within its mandate and respects due process, supporting enforceability of the eventual award.",
+  client_strategy:
+    "Advancing the client's actual commercial objective: settlement leverage, reputation and relationships, parallel strategy, cost-benefit, avoiding pyrrhic success.",
+  other: "None of the above intents clearly fits.",
+};
+
+const EDIT_RATIONALE_CATEGORIES = Object.keys(EDIT_RATIONALE_TAXONOMY);
+
+function buildEditRationalePrompt({ sectionTitle, skillName, matterSummary, before, after, diff }) {
+  const diffBlock =
+    diff && Array.isArray(diff.changes) && diff.changes.length > 0
+      ? JSON.stringify(diff.changes.slice(0, 40))
+      : "[]";
+  const categoryLines = Object.entries(EDIT_RATIONALE_TAXONOMY)
+    .map(([label, def]) => `- "${label}": ${def}`)
+    .join("\n");
+  return [
+    `You are inside Suade, a Word add-in for arbitration lawyers. Suade inserted a clean drafted ` +
+      `passage into the "${sectionTitle || "document"}" section of a statement of claim, and the lawyer ` +
+      `then edited it by hand. Infer the single most likely REASON the lawyer made this edit, and phrase ` +
+      `it as a yes/no question they can confirm.`,
+    `Classify the reason into EXACTLY one of these attorney editing-intent categories:\n${categoryLines}`,
+    `Also give "subIntent": a short, specific phrase naming the precise intent behind THIS edit, drawn ` +
+      `from what the edit actually does (e.g. "Avoid limitation or timeliness defects", "Distinguish fact ` +
+      `from inference", "Avoid double recovery", "Calibrate confidence to the evidence"). One phrase, not a sentence.`,
+    `Base your inference on the STRUCTURED DIFF and the before/after text. Prefer the most substantive ` +
+      `change if several are present. The question must be specific enough that a "yes" is genuinely ` +
+      `informative -- reference the concrete change AND the underlying concern (e.g. "Did you change this ` +
+      `date to avoid a limitation defect?"), never generic.`,
+    `<section_title>\n${sectionTitle || "(unknown)"}\n</section_title>`,
+    `<skill>\n${skillName || "(none)"}\n</skill>`,
+    ...(matterSummary ? [`<matter_summary>\n${String(matterSummary).slice(0, 1500)}\n</matter_summary>`] : []),
+    `<before_text>\n${String(before || "").slice(0, 6000)}\n</before_text>`,
+    `<after_text>\n${String(after || "").slice(0, 6000)}\n</after_text>`,
+    `<structured_diff>\n${diffBlock}\n</structured_diff>`,
+    `Respond with ONLY a JSON object, no other text:\n` +
+      `{"category": "...", "subIntent": "...", "predictedRationale": "one concise sentence", ` +
+      `"question": "a yes/no question", "confidence": 0.0}`,
+  ].join("\n\n");
+}
+
+const EDIT_RATIONALE_FALLBACK = {
+  category: "other",
+  subIntent: null,
+  predictedRationale: "",
+  question: "Did you make this change deliberately?",
+  confidence: 0,
+};
+
+function parseEditRationaleJson(text) {
+  try {
+    const cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    if (start === -1 || end === -1) throw new Error("no JSON object in response");
+    const parsed = JSON.parse(cleaned.slice(start, end + 1));
+    const category = EDIT_RATIONALE_CATEGORIES.includes(parsed.category) ? parsed.category : "other";
+    const subIntent =
+      typeof parsed.subIntent === "string" && parsed.subIntent.trim() ? parsed.subIntent.trim() : null;
+    const question =
+      typeof parsed.question === "string" && parsed.question.trim() ? parsed.question.trim() : EDIT_RATIONALE_FALLBACK.question;
+    let confidence = Number(parsed.confidence);
+    if (!Number.isFinite(confidence)) confidence = 0;
+    confidence = Math.min(1, Math.max(0, confidence));
+    return {
+      category,
+      subIntent,
+      predictedRationale: typeof parsed.predictedRationale === "string" ? parsed.predictedRationale : "",
+      question,
+      confidence,
+    };
+  } catch (err) {
+    // A malformed prediction must never surface a broken banner -- fall back
+    // to a neutral, always-valid question.
+    console.error("Suade edit rationale: unparseable prediction, using fallback:", err.message);
+    return { ...EDIT_RATIONALE_FALLBACK };
+  }
+}
+
+app.post("/api/edit-rationale/predict", async (req, res) => {
+  try {
+    const { editPairId, sectionTitle, skillName, matterSummary, before, after, diff } = req.body;
+
+    if (typeof editPairId !== "string" || !EDIT_PAIR_ID_RE.test(editPairId)) {
+      return res.status(400).json({ error: "A valid editPairId is required." });
+    }
+    if (typeof before !== "string" || typeof after !== "string" || !before.trim() || !after.trim()) {
+      return res.status(400).json({ error: "before and after text are required." });
+    }
+
+    const prompt = buildEditRationalePrompt({ sectionTitle, skillName, matterSummary, before, after, diff });
+
+    const response = await anthropic.beta.messages.create({
+      model: MODEL,
+      max_tokens: 1500,
+      thinking: { type: "adaptive" },
+      output_config: { effort: "medium" },
+      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+    });
+
+    const textBlock = response.content.find((b) => b.type === "text");
+    const parsed = parseEditRationaleJson(textBlock ? textBlock.text : "");
+    console.log(
+      `Suade edit rationale: ${editPairId} in "${sectionTitle || "n/a"}" -> ${parsed.category}` +
+        ` (confidence ${parsed.confidence})`
+    );
+    res.json(parsed);
+  } catch (err) {
+    console.error("Suade edit rationale predict error:", err);
+    res.status(500).json({ error: err.message || "Unknown edit-rationale error." });
   }
 });
 

@@ -9,6 +9,7 @@ import { insertTextAtSectionEnd, insertTextAtCursor } from "./office/insertConte
 import { openDocxInNewWindow } from "./office/openDocx";
 import { logEditPair, newEditPairId } from "./editPairLog";
 import { useEditPairSweep } from "./hooks/useEditPairSweep";
+import { useEditRationale } from "./hooks/useEditRationale";
 import UploadProgress from "./UploadProgress";
 
 interface RunMeta {
@@ -63,6 +64,7 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
   const feedback = useSkillFeedback();
   const skillCoach = useSkillCoach();
   const editPairSweep = useEditPairSweep();
+  const editRationale = useEditRationale();
 
   const [editedOutput, setEditedOutput] = useState("");
   const [insertState, setInsertState] = useState<"idle" | "inserting" | "done" | "error">("idle");
@@ -152,12 +154,16 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
       const editPairId = newEditPairId();
 
       // Section end when we know where we are; cursor fallback otherwise
-      // (e.g. a blank document during intake has no sections yet).
+      // (e.g. a blank document during intake has no sections yet). The
+      // insert returns the RENDERED baseline text of the inserted control,
+      // read the same way the sweep reads later edits -- the clean "before"
+      // that edit-rationale prediction diffs against.
+      let renderedBaseline: string | null = null;
       if (activeSection) {
-        await insertTextAtSectionEnd(activeSection, editedOutput, editPairId);
+        renderedBaseline = await insertTextAtSectionEnd(activeSection, editedOutput, editPairId);
         setInsertTarget(`at the end of section ${activeSection.sectionId}`);
       } else {
-        await insertTextAtCursor(editedOutput, editPairId);
+        renderedBaseline = await insertTextAtCursor(editedOutput, editPairId);
         setInsertTarget("at the cursor position");
       }
       setInsertState("done");
@@ -175,7 +181,18 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
           modelDraft: output,
           finalText: editedOutput,
         });
-        editPairSweep.primeBaseline(editPairId, editedOutput);
+        editPairSweep.primeBaseline(editPairId, renderedBaseline ?? editedOutput);
+        // Register this draft so edit-rationale can diff post-insert edits
+        // against the clean rendered baseline and predict why they happened.
+        editRationale.registerInsert({
+          editPairId,
+          baselineText: renderedBaseline ?? editedOutput,
+          sectionId: activeSection ? activeSection.sectionId : null,
+          sectionTitle: activeSection ? activeSection.title : null,
+          skillId: lastRunMeta ? lastRunMeta.skillId : null,
+          skillName: lastRunMeta ? lastRunMeta.skillName : null,
+          matterId: lastRunMeta ? lastRunMeta.matterId : null,
+        });
       }
     } catch (err) {
       setInsertError(err instanceof Error ? err.message : "Unknown error inserting into document.");
@@ -285,6 +302,42 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
         <div style={styles.coachManualReview}>
           <span style={styles.coachManualReviewText}>Skill Coach: {skillCoach.state.message}</span>
           <button style={styles.coachDismissButton} onClick={skillCoach.dismiss}>
+            ✕
+          </button>
+        </div>
+      )}
+
+      {editRationale.state.phase === "predicting" && (
+        <div style={styles.coachIndicator}>
+          <span style={styles.coachIndicatorText}>
+            Reviewing your edit
+            {editRationale.state.sectionTitle ? ` to ${editRationale.state.sectionTitle}` : ""} …
+          </span>
+        </div>
+      )}
+
+      {editRationale.state.phase === "asking" && (
+        <div style={styles.coachToast}>
+          <span style={styles.coachToastText}>
+            {editRationale.state.sectionTitle ? `${editRationale.state.sectionTitle} — ` : ""}
+            {editRationale.state.question}
+          </span>
+          <button style={styles.coachUndoButton} onClick={editRationale.answerYes}>
+            Yes
+          </button>
+          <button style={styles.coachUndoButton} onClick={editRationale.answerNo}>
+            No
+          </button>
+          <button style={styles.coachDismissButton} onClick={editRationale.dismiss}>
+            ✕
+          </button>
+        </div>
+      )}
+
+      {editRationale.state.phase === "answered" && (
+        <div style={styles.coachToast}>
+          <span style={styles.coachToastText}>Thanks — recorded.</span>
+          <button style={styles.coachDismissButton} onClick={editRationale.dismiss}>
             ✕
           </button>
         </div>

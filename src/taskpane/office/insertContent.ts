@@ -98,7 +98,7 @@ async function insertBlocksAfterParagraph(
   paragraph: Word.Paragraph,
   text: string,
   editPairId: string | null
-): Promise<void> {
+): Promise<Word.ContentControl | null> {
   let insertedRange: Word.Range;
 
   if (MD_ARTIFACT_RE.test(text)) {
@@ -112,7 +112,7 @@ async function insertBlocksAfterParagraph(
       insertAfter = insertAfter.insertParagraph(block.replace(/\s*\n\s*/g, " "), Word.InsertLocation.after);
       if (!firstInserted) firstInserted = insertAfter;
     }
-    if (!firstInserted) return;
+    if (!firstInserted) return null;
     insertedRange = firstInserted
       .getRange(Word.RangeLocation.whole)
       .expandTo(insertAfter.getRange(Word.RangeLocation.whole));
@@ -141,14 +141,33 @@ async function insertBlocksAfterParagraph(
     control.appearance = Word.ContentControlAppearance.hidden;
     control.cannotDelete = false;
     control.cannotEdit = false;
+    return control;
   }
+  return null;
+}
+
+/**
+ * Reads the just-inserted control's rendered text the SAME way the sweep
+ * later reads it (getReviewedText on the current tracked-changes version),
+ * so the baseline and every post-edit snapshot are directly comparable.
+ * Insertion runs under trackAll, so the inserted text is itself a pending
+ * tracked insertion; the "current" reviewed view renders it as-accepted.
+ */
+async function readRenderedBaseline(
+  context: Word.RequestContext,
+  control: Word.ContentControl | null
+): Promise<string | null> {
+  if (!control) return null;
+  const reviewed = control.getRange(Word.RangeLocation.whole).getReviewedText(Word.ChangeTrackingVersion.current);
+  await context.sync();
+  return reviewed.value;
 }
 
 export async function insertTextAtSectionEnd(
   section: DocumentSection,
   text: string,
   editPairId: string | null = null
-): Promise<void> {
+): Promise<string | null> {
   return Word.run(async (context) => {
     context.document.load("changeTrackingMode");
     const paragraphs = context.document.body.paragraphs;
@@ -164,12 +183,15 @@ export async function insertTextAtSectionEnd(
     context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
     await context.sync();
 
-    await insertBlocksAfterParagraph(context, paragraphs.items[endIndex], text, editPairId);
+    const control = await insertBlocksAfterParagraph(context, paragraphs.items[endIndex], text, editPairId);
 
     await context.sync();
+
+    const baseline = await readRenderedBaseline(context, control);
 
     context.document.changeTrackingMode = previousMode;
     await context.sync();
+    return baseline;
   });
 }
 
@@ -179,7 +201,7 @@ export async function insertTextAtSectionEnd(
  * Paragraphs land after the paragraph the cursor sits in, as tracked
  * changes, using the same paragraph-splitting as section insertion.
  */
-export async function insertTextAtCursor(text: string, editPairId: string | null = null): Promise<void> {
+export async function insertTextAtCursor(text: string, editPairId: string | null = null): Promise<string | null> {
   return Word.run(async (context) => {
     context.document.load("changeTrackingMode");
     const selectionParagraphs = context.document.getSelection().paragraphs;
@@ -194,7 +216,7 @@ export async function insertTextAtCursor(text: string, editPairId: string | null
     context.document.changeTrackingMode = Word.ChangeTrackingMode.trackAll;
     await context.sync();
 
-    await insertBlocksAfterParagraph(
+    const control = await insertBlocksAfterParagraph(
       context,
       selectionParagraphs.items[selectionParagraphs.items.length - 1],
       text,
@@ -203,7 +225,10 @@ export async function insertTextAtCursor(text: string, editPairId: string | null
 
     await context.sync();
 
+    const baseline = await readRenderedBaseline(context, control);
+
     context.document.changeTrackingMode = previousMode;
     await context.sync();
+    return baseline;
   });
 }
