@@ -374,11 +374,6 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
   return (
     <div>
       <p style={styles.fieldLabel}>Run a Skill</p>
-      <p style={styles.helperText}>
-        Calls the real Claude API via the local backend (requires "npm run server" running
-        separately). Not wired to the dropdown-by-section prediction yet (FR-3) -- pick any of the
-        11 Skills manually for now.
-      </p>
 
       <select
         style={styles.select}
@@ -396,12 +391,6 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
       {selectedSkill && <p style={styles.helperText}>{selectedSkill.description}</p>}
 
       <p style={styles.fieldLabel}>Upload Documents for This Run</p>
-      <p style={styles.helperText}>
-        Select any number of PDF, DOCX, or Outlook .msg files relevant to this Skill (e.g. a full exhibit bundle) --
-        uploads a large batch concurrently rather than one at a time. They're added to the
-        matter's document set and included in every Skill run for {matter ? matter.matterId : "this matter"} from
-        now on, not just this one.
-      </p>
 
       {!matter && (
         <p style={styles.helperText}>

@@ -111,17 +111,7 @@ const App: React.FC = () => {
               <dd style={styles.fieldValue}>{resolvedMatter.matterId}</dd>
               <dt style={styles.fieldLabel}>Client</dt>
               <dd style={styles.fieldValue}>{resolvedMatter.client}</dd>
-              <dt style={styles.fieldLabel}>Represented side</dt>
-              <dd style={styles.fieldValue}>{resolvedMatter.representedSide}</dd>
-              <dt style={styles.fieldLabel}>Counterparty</dt>
-              <dd style={styles.fieldValue}>{resolvedMatter.counterparty}</dd>
-              <dt style={styles.fieldLabel}>Matter type</dt>
-              <dd style={styles.fieldValue}>{resolvedMatter.matterType}</dd>
-              <dt style={styles.fieldLabel}>Governing law</dt>
-              <dd style={styles.fieldValue}>{resolvedMatter.governingLaw}</dd>
-              <dt style={styles.fieldLabel}>Institution / seat</dt>
-              <dd style={styles.fieldValue}>{resolvedMatter.institutionSeat}</dd>
-              <dt style={styles.fieldLabel}>Responsible team</dt>
+              <dt style={styles.fieldLabel}>Attorney</dt>
               <dd style={styles.fieldValue}>{resolvedMatter.responsibleLawyerTeam}</dd>
             </dl>
           )}
