@@ -10,7 +10,28 @@ import { openDocxInNewWindow } from "./office/openDocx";
 import { logEditPair, newEditPairId } from "./editPairLog";
 import { useEditPairSweep } from "./hooks/useEditPairSweep";
 import { useEditRationale } from "./hooks/useEditRationale";
+import { useSkillEval, StepStatus, EvalVerdict } from "./hooks/useSkillEval";
 import UploadProgress from "./UploadProgress";
+
+const FACTUAL_BACKGROUND_SKILL_ID = "factual-background";
+
+const EVAL_STATUS_COLORS: Record<StepStatus, { bg: string; fg: string }> = {
+  complete: { bg: "#EAF1E8", fg: "#2C5530" },
+  partial: { bg: "#FFF8E6", fg: "#7A5C00" },
+  missing: { bg: "#FBEAEA", fg: "#9B2C2C" },
+  blocked: { bg: "#EEF0F3", fg: "#5B6470" },
+};
+const EVAL_STATUS_LABEL: Record<StepStatus, string> = {
+  complete: "Complete",
+  partial: "Partial",
+  missing: "Missing",
+  blocked: "Blocked",
+};
+const EVAL_VERDICT_COLORS: Record<EvalVerdict, { bg: string; fg: string }> = {
+  PASS: { bg: "#2C5530", fg: "#ffffff" },
+  FAIL: { bg: "#9B2C2C", fg: "#ffffff" },
+  BLOCKED: { bg: "#5B6470", fg: "#ffffff" },
+};
 
 interface RunMeta {
   skillId: string;
@@ -60,11 +81,12 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
   const [selectedSkillId, setSelectedSkillId] = useState("");
   const [uploadRole, setUploadRole] = useState<DocumentRole>("exhibit");
   const [message, setMessage] = useState("");
-  const { run, output, workingNotes, loading, error, trace, reset: resetRun } = useSkillRunner();
+  const { run, output, workingNotes, loading, error, trace, runId, reset: resetRun } = useSkillRunner();
   const feedback = useSkillFeedback();
   const skillCoach = useSkillCoach();
   const editPairSweep = useEditPairSweep();
   const editRationale = useEditRationale();
+  const runEval = useSkillEval();
 
   const [editedOutput, setEditedOutput] = useState("");
   const [insertState, setInsertState] = useState<"idle" | "inserting" | "done" | "error">("idle");
@@ -102,12 +124,20 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
           output,
         });
       }
+      // Step-completion eval: only for skills that have one defined (v1:
+      // Factual Background). Runs on the backend copy of this run, async.
+      if (lastRunMeta?.skillId === FACTUAL_BACKGROUND_SKILL_ID && runId) {
+        void runEval.evaluate(runId);
+      }
     }
   }, [output]);
 
   const selectedSkill = SKILL_REGISTRY.find((s) => s.skillId === selectedSkillId) ?? null;
 
   const handleRun = () => {
+    // A new run supersedes the previous run's eval.
+    runEval.reset();
+
     // Snapshot any edits made in Word since the last sweep before the
     // next run changes what's on screen. Fire-and-forget.
     void editPairSweep.sweepNow();
@@ -209,6 +239,7 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
     setNotesOpenState("idle");
     setNotesOpenError(null);
     feedback.reset();
+    runEval.reset();
     resetRun();
   };
 
@@ -503,6 +534,66 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
             </div>
           )}
 
+          {runEval.state.phase === "evaluating" && (
+            <div style={styles.evalPanel}>
+              <div style={styles.evalHeader}>
+                <span style={styles.evalTitle}>Run evaluation — step completion</span>
+                <span style={styles.evalEvaluating}>Evaluating…</span>
+              </div>
+            </div>
+          )}
+
+          {runEval.state.phase === "error" && (
+            <div style={styles.evalPanel}>
+              <span style={styles.evalErrorText}>Run evaluation unavailable: {runEval.state.message}</span>
+            </div>
+          )}
+
+          {runEval.state.phase === "done" && (
+            <div style={styles.evalPanel}>
+              <div style={styles.evalHeader}>
+                <span style={styles.evalTitle}>Run evaluation — step completion</span>
+                <span
+                  style={{
+                    ...styles.evalVerdict,
+                    background: EVAL_VERDICT_COLORS[runEval.state.record.overall].bg,
+                    color: EVAL_VERDICT_COLORS[runEval.state.record.overall].fg,
+                  }}
+                >
+                  {runEval.state.record.overall}
+                </span>
+              </div>
+              <div style={styles.evalCounts}>
+                {runEval.state.record.summary.complete}/{runEval.state.record.summary.total} complete
+                {runEval.state.record.summary.partial > 0 && ` · ${runEval.state.record.summary.partial} partial`}
+                {runEval.state.record.summary.missing > 0 && ` · ${runEval.state.record.summary.missing} missing`}
+                {runEval.state.record.summary.blocked > 0 && ` · ${runEval.state.record.summary.blocked} blocked`}
+              </div>
+              <table style={styles.evalTable}>
+                <tbody>
+                  {runEval.state.record.steps.map((s) => (
+                    <tr key={s.step_number}>
+                      <td style={styles.evalStepCell}>
+                        {s.step_number}. {s.step_name}
+                      </td>
+                      <td style={styles.evalStatusCell}>
+                        <span
+                          style={{
+                            ...styles.evalChip,
+                            background: EVAL_STATUS_COLORS[s.status].bg,
+                            color: EVAL_STATUS_COLORS[s.status].fg,
+                          }}
+                        >
+                          {EVAL_STATUS_LABEL[s.status]}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           {composer}
 
           {lastRunMeta && (
@@ -752,6 +843,23 @@ const styles: Record<string, React.CSSProperties> = {
     resize: "vertical",
   },
   feedbackRow: { display: "flex", alignItems: "center", gap: "8px", marginTop: "10px" },
+  evalPanel: {
+    marginTop: "12px",
+    padding: "10px 12px",
+    background: "#F9FAFB",
+    border: "1px solid #E2E6EB",
+    borderRadius: "6px",
+  },
+  evalHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" },
+  evalTitle: { fontSize: "12px", fontWeight: 700, color: "#33404F" },
+  evalVerdict: { fontSize: "11px", fontWeight: 700, padding: "2px 10px", borderRadius: "10px", letterSpacing: "0.03em" },
+  evalEvaluating: { fontSize: "11px", color: "#5B6470", fontStyle: "italic" },
+  evalErrorText: { fontSize: "11px", color: "#7A5C00" },
+  evalCounts: { fontSize: "11px", color: "#5B6470", marginBottom: "8px" },
+  evalTable: { width: "100%", borderCollapse: "collapse", fontSize: "12px" },
+  evalStepCell: { padding: "3px 6px 3px 0", color: "#33404F", borderTop: "1px solid #EDF0F3", lineHeight: 1.35 },
+  evalStatusCell: { padding: "3px 0", textAlign: "right", borderTop: "1px solid #EDF0F3", whiteSpace: "nowrap" },
+  evalChip: { fontSize: "10px", fontWeight: 600, padding: "1px 8px", borderRadius: "9px" },
   voteButton: {
     fontSize: "14px",
     padding: "2px 8px",

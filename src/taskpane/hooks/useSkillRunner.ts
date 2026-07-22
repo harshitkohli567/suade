@@ -51,6 +51,9 @@ export function useSkillRunner() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [trace, setTrace] = useState<TraceEntry[]>([]);
+  // Exposed so the step-completion eval can reference this exact run on the
+  // backend (which still holds its raw working notes).
+  const [runId, setRunId] = useState<string | null>(null);
 
   const run = async (args: RunArgs) => {
     setLoading(true);
@@ -58,6 +61,7 @@ export function useSkillRunner() {
     setOutput(null);
     setWorkingNotes(null);
     setTrace([]);
+    setRunId(null);
 
     try {
       const sectionText = args.activeSection ? await readSectionText(args.activeSection) : "";
@@ -92,6 +96,7 @@ export function useSkillRunner() {
       }
 
       const { runId } = (await startResponse.json()) as { runId: string };
+      setRunId(runId);
 
       const deadline = Date.now() + POLL_TIMEOUT_MS;
       while (Date.now() < deadline) {
@@ -140,7 +145,8 @@ export function useSkillRunner() {
     setWorkingNotes(null);
     setError(null);
     setTrace([]);
+    setRunId(null);
   };
 
-  return { run, output, workingNotes, loading, error, trace, reset };
+  return { run, output, workingNotes, loading, error, trace, runId, reset };
 }

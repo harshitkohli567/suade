@@ -11,6 +11,7 @@ const devCerts = require("office-addin-dev-certs");
 const mammoth = require("mammoth");
 const MsgReader = require("@kenjiuno/msgreader").default;
 const { buildWorkingNotesDocx } = require("./workingNotesDocx");
+const skillEval = require("./skillEval");
 const {
   sanitizeLawyerId,
   isProtectedSection,
@@ -76,6 +77,10 @@ const RUN_TTL_MS = 30 * 60 * 1000; // stale runs get swept so this doesn't grow 
 // output, for which matter, when. JSONL, appended on each completed run.
 const SKILL_RUNS_LOG_PATH = path.join(__dirname, "skill-runs.log");
 
+// Step-completion eval corpus: one record per evaluated run (the per-step
+// statuses + overall verdict). Seeds the eval dataset for skill quality.
+const SKILL_EVAL_LOG_PATH = path.join(__dirname, "skill-evals.log");
+
 /**
  * Edit-pair corpus: (model draft -> what the lawyer actually inserted),
  * captured at Insert time. This is the raw material for future style
@@ -125,6 +130,7 @@ app.get("/api/health", (req, res) => {
  * holding one long-lived connection open.
  */
 const skillRuns = new Map(); // runId -> { status: "pending" | "done" | "error", output?, error?, createdAt, trace }
+const evalRuns = new Map(); // evalRunId -> { status: "pending" | "done" | "error", record?, error?, createdAt }
 
 /**
  * Execution trace shown live in the task pane's "Backend activity" panel.
@@ -563,6 +569,100 @@ app.get("/api/run-skill/:runId", (req, res) => {
   res.json(run);
 });
 
+// ---------------------------------------------------------------------------
+// Skill-run eval (v1: Factual Background step-completion check). Runs as its
+// own background job -- the judge reads potentially large working notes and
+// must not hit Word's ~60s webview timeout -- so the client kicks it off,
+// gets an evalRunId, and polls, exactly like a skill run.
+// ---------------------------------------------------------------------------
+
+setInterval(() => {
+  const cutoff = Date.now() - RUN_TTL_MS;
+  for (const [id, run] of evalRuns) {
+    if (run.createdAt < cutoff) evalRuns.delete(id);
+  }
+}, 60 * 1000).unref?.();
+
+async function executeEval(evalRunId, { cleanDraft, workingNotesRaw, uploadedDocCount, matterId }) {
+  try {
+    const prompt = skillEval.buildEvalPrompt({
+      cleanDraft,
+      workingNotes: workingNotesRaw,
+      uploadedDocCount,
+      matterId,
+    });
+    const response = await anthropic.beta.messages.create({
+      model: MODEL,
+      max_tokens: 4000,
+      thinking: { type: "adaptive" },
+      output_config: { effort: "medium" },
+      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+    });
+    const textBlock = response.content.find((b) => b.type === "text");
+    let steps = skillEval.parseEvalJson(textBlock ? textBlock.text : "");
+    steps = skillEval.applyDeterministicGuards(steps, { workingNotes: workingNotesRaw, uploadedDocCount });
+    const { overall, summary } = skillEval.computeOverall(steps);
+    const record = { skillId: skillEval.FACTUAL_BACKGROUND_SKILL_ID, overall, summary, steps };
+
+    const run = evalRuns.get(evalRunId);
+    if (run) {
+      run.status = "done";
+      run.record = record;
+      run.createdAt = Date.now();
+    }
+    console.log(`Suade skill-eval ${evalRunId}: ${overall} (${summary.complete}/${summary.total} complete)`);
+    fs.appendFileSync(
+      SKILL_EVAL_LOG_PATH,
+      `${JSON.stringify({ evalRunId, matterId: matterId || null, evaluatedAt: new Date().toISOString(), ...record })}\n`
+    );
+  } catch (err) {
+    console.error("Suade skill-eval error:", err);
+    const run = evalRuns.get(evalRunId);
+    if (run) {
+      run.status = "error";
+      run.error = friendlyApiError(err);
+    }
+  }
+}
+
+app.post("/api/skill-eval", (req, res) => {
+  try {
+    const { runId } = req.body;
+    const run = skillRuns.get(runId);
+    if (!run || run.status !== "done") {
+      return res.status(404).json({ error: "Unknown, unfinished, or expired runId." });
+    }
+    if (run.skillId !== skillEval.FACTUAL_BACKGROUND_SKILL_ID) {
+      return res.status(400).json({ error: "No eval defined for this skill yet.", skillId: run.skillId || null });
+    }
+    if (!run.workingNotesRaw) {
+      return res.status(400).json({ error: "This run produced no working notes to evaluate." });
+    }
+
+    const evalRunId = `eval-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    evalRuns.set(evalRunId, { status: "pending", createdAt: Date.now() });
+    res.json({ evalRunId });
+
+    executeEval(evalRunId, {
+      cleanDraft: run.cleanDraft || run.output || "",
+      workingNotesRaw: run.workingNotesRaw,
+      uploadedDocCount: run.uploadedDocCount,
+      matterId: run.matterId,
+    });
+  } catch (err) {
+    console.error("Suade skill-eval start error:", err);
+    res.status(500).json({ error: err.message || "Unknown error starting eval." });
+  }
+});
+
+app.get("/api/skill-eval/:evalRunId", (req, res) => {
+  const run = evalRuns.get(req.params.evalRunId);
+  if (!run) {
+    return res.status(404).json({ error: "Unknown or expired evalRunId." });
+  }
+  res.json(run);
+});
+
 /**
  * Splits a skill response into its two channels. Tag-less responses
  * (message-only runs, or a model that ignored the format) fall back to
@@ -712,6 +812,13 @@ async function executeSkillRun(runId, { skillId, skillInstructions, matter, sect
       run.workingNotesFilename = workingNotesFilename;
       run.workingNotesInline = workingNotesInline;
       run.createdAt = Date.now();
+      // Retained for the step-completion eval, which needs the RAW working
+      // notes (the docx/base64 the client gets back is opaque to it).
+      run.skillId = skillId || null;
+      run.matterId = matter ? matter.matterId : null;
+      run.cleanDraft = cleanDraft;
+      run.workingNotesRaw = workingNotes || null;
+      run.uploadedDocCount = Array.isArray(uploadedDocuments) ? uploadedDocuments.length : null;
     }
 
     // Minimal Activity Graph record (FR-2.1): which Skill produced which
