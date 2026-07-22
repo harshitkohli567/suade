@@ -67,7 +67,13 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const SKILLS_DIR = path.join(__dirname, "src", "data", "skills", "source");
 const MODEL = "claude-sonnet-5";
-const MAX_TOKENS = 16000;
+// claude-sonnet-5 caps at 128K output tokens. Skills like Factual Background
+// emit two channels (clean draft + a large working-notes page) plus adaptive
+// thinking, which blew past 16K -- runs were returning thinking-only output
+// with stop_reason "max_tokens". 64K gives headroom; the Node SDK auto-scales
+// its non-streaming request timeout for large max_tokens, so no streaming
+// refactor is needed at this value (only ~128K would require streaming).
+const MAX_TOKENS = 64000;
 const FILES_API_BETA = "files-api-2025-04-14";
 const FEEDBACK_LOG_PATH = path.join(__dirname, "skill-feedback.log");
 const PLACEHOLDER_LAWYER_ID = "current lawyer (placeholder -- no auth built yet)";
