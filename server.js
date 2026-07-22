@@ -597,13 +597,19 @@ async function executeEval(evalRunId, { cleanDraft, workingNotesRaw, uploadedDoc
       uploadedDocCount,
       matterId,
     });
-    const response = await anthropic.beta.messages.create({
-      model: MODEL,
-      max_tokens: 4000,
-      thinking: { type: "adaptive" },
-      output_config: { effort: "medium" },
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-    });
+    // The judge reads a large working-notes doc + draft under adaptive
+    // thinking; 4K let thinking consume the whole budget, leaving an empty
+    // text block that parsed to all-"missing". Give it room, and stream so
+    // the larger budget can't trip the SDK's non-streaming time ceiling.
+    const response = await anthropic.beta.messages
+      .stream({
+        model: MODEL,
+        max_tokens: 20000,
+        thinking: { type: "adaptive" },
+        output_config: { effort: "medium" },
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+      })
+      .finalMessage();
     const textBlock = response.content.find((b) => b.type === "text");
     let steps = skillEval.parseEvalJson(textBlock ? textBlock.text : "");
     steps = skillEval.applyDeterministicGuards(steps, { workingNotes: workingNotesRaw, uploadedDocCount });
