@@ -75,8 +75,8 @@ interface PendingAnswer {
 
 export function useEditRationale() {
   const [state, setState] = useState<RationaleState>({ phase: "idle" });
-  // Console-only breadcrumbs for the poll/predict lifecycle; safe to keep,
-  // never surfaced to the lawyer.
+  // Console-only breadcrumbs for notable lifecycle events; never shown to the
+  // lawyer, and kept off the per-poll hot path to avoid console spam.
   const note = (msg: string) => console.log("[edit-rationale]", msg);
 
   const registryRef = useRef<Map<string, InsertMeta>>(new Map());
@@ -148,7 +148,6 @@ export function useEditRationale() {
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
       console.error("Edit-rationale predict failed:", err);
-      note(`predict request failed: ${err instanceof Error ? err.message : "unknown"}`);
       setState({ phase: "idle" });
     }
   };
@@ -157,17 +156,41 @@ export function useEditRationale() {
     let cancelled = false;
 
     const poll = async () => {
-      if (cancelled || busyRef.current || registryRef.current.size === 0) return;
+      // NB: do not bail when the registry is empty -- we still need to read
+      // the document to ADOPT drafts inserted in a previous pane session.
+      if (cancelled || busyRef.current) return;
       busyRef.current = true;
       try {
         let snapshots;
         try {
           snapshots = await readEditPairSnapshots();
         } catch (err) {
-          note(`snapshot read failed: ${err instanceof Error ? err.message : "unknown"}`);
+          console.warn("Edit-rationale: snapshot read failed:", err);
           return;
         }
         const byId = new Map(snapshots.map((s) => [s.editPairId, s.text]));
+
+        // Adopt Suade drafts that are in the document but not yet tracked --
+        // e.g. inserted in an earlier pane session, before this reload. The
+        // content control persists in the .docx, but the in-memory registry
+        // does not. We can't recover the original model baseline after a
+        // reload, so we treat the draft's CURRENT text as the baseline and
+        // predict on subsequent edits. (Section/skill/matter aren't known
+        // for adopted drafts; they stay null.)
+        for (const snap of snapshots) {
+          if (registryRef.current.has(snap.editPairId)) continue;
+          registryRef.current.set(snap.editPairId, {
+            baselineText: snap.text,
+            sectionId: null,
+            sectionTitle: null,
+            skillId: null,
+            skillName: null,
+            matterId: null,
+            lastSeenText: snap.text,
+            lastPredictedText: snap.text,
+          });
+          note(`adopted existing draft ${snap.editPairId} (${snap.text.length} chars)`);
+        }
 
         for (const [editPairId, meta] of registryRef.current) {
           const current = byId.get(editPairId);
@@ -192,7 +215,6 @@ export function useEditRationale() {
       }
     };
 
-    note(`watching for edits (polling every ${POLL_MS}ms)`);
     const interval = window.setInterval(() => void poll(), POLL_MS);
 
     return () => {
