@@ -713,7 +713,11 @@ const API_RETRY_DELAYS_MS = [5000, 15000, 30000];
 async function callClaudeWithRetry(runId, params) {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await anthropic.beta.messages.create(params);
+      // Stream and collect the final message: at MAX_TOKENS (64K) a skill run
+      // can exceed the SDK's 10-minute non-streaming ceiling, which the SDK
+      // rejects outright. finalMessage() returns the same Message shape the
+      // caller reads, so nothing downstream changes.
+      return await anthropic.beta.messages.stream(params).finalMessage();
     } catch (err) {
       const retryable = err && RETRYABLE_API_STATUSES.has(err.status);
       if (!retryable || attempt >= API_RETRY_DELAYS_MS.length) throw err;
