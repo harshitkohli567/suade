@@ -135,12 +135,6 @@ const App: React.FC = () => {
       {!resolvedMatter && (
         <div style={styles.intakeBlock}>
           <p style={styles.fieldLabel}>Or start from a blank document</p>
-          <p style={styles.helperText}>
-            Describe the matter in your own words and attach the client meeting transcript or an
-            email from the client (PDF, DOCX, or Outlook .msg). Suade will pull out the matter
-            details -- or recognise the matter if it already exists in the repository -- so you can
-            start drafting.
-          </p>
 
           <textarea
             style={styles.intakeTextarea}
