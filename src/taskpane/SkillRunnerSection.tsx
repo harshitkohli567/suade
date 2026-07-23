@@ -496,10 +496,11 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
 
       {output !== null && (
         <div style={styles.outputBox}>
-          <p style={styles.outputLabel}>
-            Clean draft -- review and edit before inserting. Working material (gap reports,
-            checklists) is kept separate below.
-          </p>
+          <div style={styles.outputTopBar}>
+            <button style={styles.discardButton} onClick={handleDiscard}>
+              Clear output
+            </button>
+          </div>
           <textarea
             style={styles.outputTextarea}
             value={editedOutput}
@@ -507,12 +508,38 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
             rows={14}
           />
 
-          {workingNotes && workingNotes.kind === "docx" && (
-            <div style={styles.notesRow}>
+          <div style={styles.actionRow}>
+            <button
+              style={styles.insertButton}
+              onClick={handleInsert}
+              disabled={insertState === "inserting"}
+            >
+              {insertState === "inserting" ? "Inserting…" : "Insert"}
+            </button>
+            {workingNotes && workingNotes.kind === "docx" && (
               <button style={styles.notesButton} onClick={handleOpenNotes} disabled={notesOpenState === "opening"}>
-                {notesOpenState === "opening" ? "Opening…" : "Open working notes in Word"}
+                <span style={styles.wordIcon} aria-hidden="true">W</span>
+                {notesOpenState === "opening" ? "Opening…" : "Open Working Notes"}
               </button>
-              <span style={styles.notesFilename}>{workingNotes.filename}</span>
+            )}
+          </div>
+
+          {!activeSection && (
+            <p style={styles.helperText}>
+              <em>No section detected -- the output will be inserted at the cursor position.</em>
+            </p>
+          )}
+
+          {insertState === "done" && (
+            <p style={styles.successText}>
+              Inserted as a tracked change {insertTarget}. Review it in Word (Review tab -- Track
+              Changes) before accepting.
+            </p>
+          )}
+
+          {insertState === "error" && insertError && (
+            <div style={styles.errorBox}>
+              <strong>Insert error:</strong> {insertError}
             </div>
           )}
 
@@ -595,66 +622,6 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
           )}
 
           {composer}
-
-          {lastRunMeta && (
-            <div style={styles.feedbackRow}>
-              <span style={styles.helperText}>Was this output helpful?</span>
-              <button
-                style={{
-                  ...styles.voteButton,
-                  ...(feedback.vote === "up" ? styles.voteButtonActiveUp : {}),
-                }}
-                onClick={() => feedback.submitVote({ vote: "up", ...lastRunMeta })}
-                disabled={feedback.submitting}
-              >
-                👍
-              </button>
-              <button
-                style={{
-                  ...styles.voteButton,
-                  ...(feedback.vote === "down" ? styles.voteButtonActiveDown : {}),
-                }}
-                onClick={() => feedback.submitVote({ vote: "down", ...lastRunMeta })}
-                disabled={feedback.submitting}
-              >
-                👎
-              </button>
-              {feedback.vote && <span style={styles.successText}>Thanks, recorded.</span>}
-              {feedback.error && <span style={styles.feedbackErrorText}>{feedback.error}</span>}
-            </div>
-          )}
-
-          <div style={styles.insertRow}>
-            <button
-              style={styles.insertButton}
-              onClick={handleInsert}
-              disabled={insertState === "inserting"}
-            >
-              {insertState === "inserting" ? "Inserting…" : "Insert into Document"}
-            </button>
-            <button style={styles.discardButton} onClick={handleDiscard}>
-              Clear output
-            </button>
-          </div>
-
-          {!activeSection && (
-            <p style={styles.helperText}>
-              <em>No section detected -- the output will be inserted at the cursor position.</em>
-            </p>
-          )}
-
-          {insertState === "done" && (
-            <p style={styles.successText}>
-              Inserted as a tracked change {insertTarget}. Review it in Word (Review tab -- Track
-              Changes) before accepting.
-            </p>
-          )}
-
-          {insertState === "error" && insertError && (
-            <div style={styles.errorBox}>
-              <strong>Insert error:</strong> {insertError}
-            </div>
-          )}
         </div>
       )}
     </div>
@@ -830,7 +797,22 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "4px",
     padding: "10px",
   },
-  outputLabel: { fontSize: "11px", color: "#5B6470", margin: "0 0 6px 0", lineHeight: 1.5 },
+  outputTopBar: { display: "flex", justifyContent: "flex-end", marginBottom: "8px" },
+  actionRow: { display: "flex", gap: "8px", marginTop: "10px", alignItems: "center" },
+  wordIcon: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "16px",
+    height: "16px",
+    background: "#2B579A",
+    color: "#fff",
+    borderRadius: "3px",
+    fontSize: "10px",
+    fontWeight: 700,
+    marginRight: "6px",
+    flexShrink: 0,
+  },
   outputTextarea: {
     width: "100%",
     fontSize: "12px",
@@ -873,11 +855,14 @@ const styles: Record<string, React.CSSProperties> = {
   feedbackErrorText: { fontSize: "11px", color: "#B3261E" },
   notesRow: { display: "flex", alignItems: "center", gap: "8px", marginTop: "8px" },
   notesButton: {
-    fontSize: "12px",
-    padding: "6px 12px",
-    background: "#fff",
-    color: "#1F3A5F",
-    border: "1px solid #1F3A5F",
+    display: "inline-flex",
+    alignItems: "center",
+    fontSize: "13px",
+    fontWeight: 600,
+    padding: "8px 14px",
+    background: "#EAF6EE",
+    color: "#2C5530",
+    border: "1px solid #A9CDB5",
     borderRadius: "4px",
     cursor: "pointer",
     flexShrink: 0,
@@ -908,9 +893,10 @@ const styles: Record<string, React.CSSProperties> = {
   },
   insertRow: { display: "flex", gap: "8px", marginTop: "8px" },
   insertButton: {
-    fontSize: "12px",
-    padding: "8px 12px",
-    background: "#2C5530",
+    fontSize: "13px",
+    fontWeight: 600,
+    padding: "8px 18px",
+    background: "#2B5AA6",
     color: "#fff",
     border: "none",
     borderRadius: "4px",
