@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { MatterRecord, DocumentSection, DocumentRole, UploadedDocumentRecord } from "@/types";
 import { SKILL_REGISTRY } from "@/data/skills/registry";
 import { useSkillRunner } from "./hooks/useSkillRunner";
@@ -12,6 +12,8 @@ import { useEditPairSweep } from "./hooks/useEditPairSweep";
 import { useEditRationale } from "./hooks/useEditRationale";
 import { useSkillEval, StepStatus, EvalVerdict } from "./hooks/useSkillEval";
 import UploadProgress from "./UploadProgress";
+import TaskDetectedCard from "./TaskDetectedCard";
+import { deriveDetectedContext } from "@/data/sections/sectionTasks";
 
 const FACTUAL_BACKGROUND_SKILL_ID = "factual-background";
 
@@ -133,6 +135,13 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
   }, [output]);
 
   const selectedSkill = SKILL_REGISTRY.find((s) => s.skillId === selectedSkillId) ?? null;
+
+  // When a section is detected we render the Task-Detected card, which owns
+  // Skills selection; its primary drafting skill drives the run.
+  const detectedContext = deriveDetectedContext(activeSection);
+  const handlePrimarySkillChange = useCallback((skillId: string | null) => {
+    setSelectedSkillId(skillId ?? "");
+  }, []);
 
   const handleRun = () => {
     // A new run supersedes the previous run's eval.
@@ -404,6 +413,22 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
 
   return (
     <div>
+      {detectedContext ? (
+        <TaskDetectedCard
+          context={detectedContext}
+          matter={matter}
+          uploadedDocuments={uploadedDocuments}
+          uploadDocuments={uploadDocuments}
+          uploading={uploading}
+          uploadJobs={uploadJobs}
+          uploadError={uploadError}
+          removeDocument={removeDocument}
+          removingDocumentIds={removingDocumentIds}
+          removeError={removeError}
+          onPrimarySkillChange={handlePrimarySkillChange}
+        />
+      ) : (
+        <>
       <p style={styles.fieldLabel}>Run a Skill</p>
 
       <select
@@ -488,6 +513,8 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
             );
           })}
         </ul>
+      )}
+        </>
       )}
 
       <style>{"@keyframes suade-spin { to { transform: rotate(360deg); } }"}</style>

@@ -1,47 +1,30 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useDocumentContext } from "./hooks/useDocumentContext";
 import { useSectionDebug } from "./hooks/useSectionDebug";
 import { useMatterDetection } from "./hooks/useMatterDetection";
-import { useMatterIntake } from "./hooks/useMatterIntake";
 import { resolveAutoMatch } from "@/data/matters/matterMatching";
-import { useDocumentUploads, UNASSIGNED_MATTER_ID } from "./hooks/useDocumentUploads";
+import { useDocumentUploads } from "./hooks/useDocumentUploads";
 import SkillRunnerSection from "./SkillRunnerSection";
 import BackendStatus from "./BackendStatus";
-import UploadProgress from "./UploadProgress";
 
 const App: React.FC = () => {
   const { context, error } = useDocumentContext();
   const debug = useSectionDebug();
   const matterDetection = useMatterDetection();
-  const intake = useMatterIntake();
   const documentUploads = useDocumentUploads();
   const boldSignals = debug.signals.filter((s) => s.bold);
   const resolvedMatch = resolveAutoMatch(matterDetection.results);
-  const [matterCardCollapsed, setMatterCardCollapsed] = useState(false);
   const [diagnosticsCollapsed, setDiagnosticsCollapsed] = useState(false);
-  const [intakeInstruction, setIntakeInstruction] = useState("");
 
-  // A matter established via blank-document intake takes precedence;
-  // otherwise fall back to document-text detection.
-  const resolvedMatter = intake.result ? intake.result.matter : resolvedMatch ? resolvedMatch.matter : null;
-  const matterNote = intake.result ? intake.result.note : resolvedMatch ? resolvedMatch.reason : null;
+  // Matter detection is retained (hooks + backend intake endpoint untouched)
+  // but has no UI in the pane for now. Run detection once on mount so uploads
+  // and Skill runs still resolve a matter without a visible Matter Detection
+  // section. Blank-document intake UI is removed for now.
+  useEffect(() => {
+    void matterDetection.run();
+  }, []); // eslint-disable-line
 
-  const intakeDocs = documentUploads.documentsForMatter(UNASSIGNED_MATTER_ID);
-
-  const handleIntakeFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0) return;
-    const files = Array.from(e.target.files);
-    e.target.value = "";
-    await documentUploads.uploadDocuments(files, UNASSIGNED_MATTER_ID, "client_communication");
-  };
-
-  const handleStartMatter = async () => {
-    const result = await intake.run(intakeInstruction, intakeDocs);
-    if (result) {
-      // Intake materials become the new matter's documents, so Skills can use them.
-      documentUploads.reassignDocuments(UNASSIGNED_MATTER_ID, result.matter.matterId);
-    }
-  };
+  const resolvedMatter = resolvedMatch ? resolvedMatch.matter : null;
 
   return (
     <div style={styles.container}>
@@ -76,105 +59,6 @@ const App: React.FC = () => {
             )}
           </dd>
         </dl>
-      )}
-
-      <hr style={styles.divider} />
-
-      <p style={styles.fieldLabel}>Matter Detection</p>
-      <button style={styles.debugButton} onClick={matterDetection.run} disabled={matterDetection.loading}>
-        {matterDetection.loading ? "Detecting…" : "Detect Matter"}
-      </button>
-
-      {matterDetection.error && (
-        <div style={styles.errorBox}>
-          <strong>Matter detection error:</strong> {matterDetection.error}
-        </div>
-      )}
-
-      {resolvedMatter && (
-        <div style={styles.matterCard}>
-          <div style={styles.matterCardHeader}>
-            <p style={styles.matterCardTitle}>
-              {matterCardCollapsed ? resolvedMatter.matterId : "Resolved Matter"}
-            </p>
-            <button
-              style={styles.collapseButton}
-              onClick={() => setMatterCardCollapsed((prev) => !prev)}
-            >
-              {matterCardCollapsed ? "Show" : "Hide"}
-            </button>
-          </div>
-
-          {!matterCardCollapsed && (
-            <dl style={styles.fieldList}>
-              <dt style={styles.fieldLabel}>Matter ID</dt>
-              <dd style={styles.fieldValue}>{resolvedMatter.matterId}</dd>
-              <dt style={styles.fieldLabel}>Client</dt>
-              <dd style={styles.fieldValue}>{resolvedMatter.client}</dd>
-              <dt style={styles.fieldLabel}>Attorney</dt>
-              <dd style={styles.fieldValue}>{resolvedMatter.responsibleLawyerTeam}</dd>
-            </dl>
-          )}
-
-          {!matterCardCollapsed && matterNote && <p style={styles.matchReason}>{matterNote}</p>}
-
-          {!matterCardCollapsed && intake.result && intake.result.gaps.length > 0 && (
-            <ul style={styles.gapList}>
-              {intake.result.gaps.map((gap, i) => (
-                <li key={i}>{gap}</li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-
-      {!resolvedMatter && matterDetection.hasRun && (
-        <p style={styles.body}>No matter detected in this document.</p>
-      )}
-
-      {!resolvedMatter && (
-        <div style={styles.intakeBlock}>
-          <p style={styles.fieldLabel}>Or start from a blank document</p>
-
-          <textarea
-            style={styles.intakeTextarea}
-            value={intakeInstruction}
-            onChange={(e) => setIntakeInstruction(e.target.value)}
-            placeholder="e.g. New matter -- we act for the client in the attached meeting notes. Prepare to draft a Statement of Claim."
-            rows={3}
-          />
-
-          <input
-            type="file"
-            accept=".pdf,.docx,.msg"
-            multiple
-            onChange={handleIntakeFiles}
-            style={styles.intakeFileInput}
-            disabled={documentUploads.uploading || intake.loading}
-          />
-
-          <UploadProgress jobs={documentUploads.uploadJobs} />
-
-          {intakeDocs.length > 0 && (
-            <p style={styles.helperText}>
-              Attached: {intakeDocs.map((d) => d.filename).join(", ")}
-            </p>
-          )}
-
-          <button
-            style={styles.debugButton}
-            onClick={handleStartMatter}
-            disabled={intake.loading || documentUploads.uploading || (!intakeInstruction.trim() && intakeDocs.length === 0)}
-          >
-            {intake.loading ? "Reading materials…" : "Start Matter"}
-          </button>
-
-          {intake.error && (
-            <div style={styles.errorBox}>
-              <strong>Intake error:</strong> {intake.error}
-            </div>
-          )}
-        </div>
       )}
 
       <hr style={styles.divider} />

@@ -73,11 +73,18 @@ interface PendingAnswer {
   predictedAt: string;
 }
 
+/** Collapse whitespace so trivial re-render noise in the tracked-text read isn't mistaken for an edit. */
+const normalizeText = (s: string): string => s.replace(/\s+/g, " ").trim();
+
 export function useEditRationale() {
   const [state, setState] = useState<RationaleState>({ phase: "idle" });
-  // Console-only breadcrumbs for notable lifecycle events; never shown to the
-  // lawyer, and kept off the per-poll hot path to avoid console spam.
-  const note = (msg: string) => console.log("[edit-rationale]", msg);
+  // Small status line surfaced in the pane so the lawyer (and we) can see the
+  // watcher is alive, which drafts it's tracking, and when a prediction fires.
+  const [debug, setDebug] = useState("starting up…");
+  const note = (msg: string) => {
+    console.log("[edit-rationale]", msg);
+    setDebug(msg);
+  };
 
   const registryRef = useRef<Map<string, InsertMeta>>(new Map());
   const controllerRef = useRef<AbortController | null>(null);
@@ -109,6 +116,9 @@ export function useEditRationale() {
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
+    // Hard timeout: a stalled predict must never leave the poll's busy-lock
+    // stuck, which would silently freeze the watcher for the whole session.
+    const timeout = window.setTimeout(() => controller.abort(), 30000);
     note(`predicting for ${editPairId} (${diff.summary.modified}m/${diff.summary.added}a/${diff.summary.deleted}d)…`);
     setState({ phase: "predicting", sectionTitle: meta.sectionTitle });
 
@@ -146,9 +156,12 @@ export function useEditRationale() {
         confidence: prediction.confidence,
       });
     } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
+      // Always fall back to idle (even on abort) so the state and the poll
+      // never wedge; prediction is a background nicety, never a blocker.
       console.error("Edit-rationale predict failed:", err);
       setState({ phase: "idle" });
+    } finally {
+      window.clearTimeout(timeout);
     }
   };
 
@@ -192,6 +205,7 @@ export function useEditRationale() {
           note(`adopted existing draft ${snap.editPairId} (${snap.text.length} chars)`);
         }
 
+        let acted = false;
         for (const [editPairId, meta] of registryRef.current) {
           const current = byId.get(editPairId);
           if (current === undefined) continue; // control not found this read
@@ -199,16 +213,29 @@ export function useEditRationale() {
           meta.lastSeenText = current;
 
           if (!current.trim()) continue; // deleted / rejected insertion
-          if (current !== prev) continue; // still changing -> wait for the edit to settle
-          if (current === meta.baselineText) continue; // unchanged vs the inserted draft
-          if (current === meta.lastPredictedText) continue; // already asked about this exact text
+          if (normalizeText(current) !== normalizeText(prev)) {
+            note(`draft ${editPairId} is being edited…`);
+            acted = true;
+            continue; // still changing -> wait for the edit to settle
+          }
+          if (normalizeText(current) === normalizeText(meta.baselineText)) continue; // no new edit since last time
 
           const diff = diffSegments(meta.baselineText, current);
           if (diff.unchanged) continue; // only whitespace/formatting differs
 
-          meta.lastPredictedText = current;
+          acted = true;
           await predictRef.current(editPairId, meta, current, diff);
+          // Advance the baseline so the NEXT edit is judged incrementally
+          // against this state -- and always re-detects, edit after edit.
+          meta.baselineText = current;
           break; // one banner at a time
+        }
+        if (!acted) {
+          note(
+            registryRef.current.size === 0
+              ? "watching — no Suade drafts in this document yet"
+              : `watching ${registryRef.current.size} draft(s) for edits…`
+          );
         }
       } finally {
         busyRef.current = false;
@@ -256,5 +283,5 @@ export function useEditRationale() {
     setState({ phase: "idle" });
   }, []);
 
-  return { state, registerInsert, answerYes, answerNo, dismiss };
+  return { state, debug, registerInsert, answerYes, answerNo, dismiss };
 }
