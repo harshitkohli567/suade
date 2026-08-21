@@ -76,6 +76,11 @@ export interface SectionTaskSpec {
   assumptions: string;
   /** Skills pre-selected for the section (drafting first, then formatting). */
   skillIds: string[];
+  /**
+   * Authoritative source inputs for the section, from the product-supplied
+   * per-section Sources table. Overrides the registry-derived default.
+   */
+  sources: string;
 }
 
 /**
@@ -89,60 +94,70 @@ export const SECTION_TASKS: Record<string, SectionTaskSpec> = {
     goal: "Frame the dispute",
     assumptions: "None",
     skillIds: ["brief-summary-of-facts", "paragraphs"],
+    sources: "Exhibits, Witness Statements, Governing Contract",
   },
   II: {
     task: "Draft description of parties",
     goal: "Identify the parties",
     assumptions: "None",
     skillIds: ["description-of-parties", "paragraphs", "headings"],
+    sources: "Governing Contract, Corporate Registry",
   },
   III: {
     task: "Draft jurisdiction section",
     goal: "Determine applicable rules",
     assumptions: "None",
     skillIds: ["jurisdiction-and-applicable-law", "paragraphs", "headings"],
+    sources: "Governing Contract",
   },
   IV: {
     task: "Draft factual background",
     goal: "Build the chronology",
     assumptions: "None",
     skillIds: ["factual-background", "paragraphs"],
+    sources: "Exhibits, Witness Statements, Governing Contract, Expert Reports",
   },
   V: {
     task: "Draft the breach",
     goal: "Establish the breach",
     assumptions: "None",
     skillIds: ["breach", "paragraphs"],
+    sources: "Exhibits, Witness Statements, Governing Contract",
   },
   VII: {
     task: "Draft causation",
     goal: "Link breach to loss",
     assumptions: "None",
     skillIds: ["causation", "paragraphs"],
+    sources: "Legal Commentary, Treatise",
   },
   IX: {
     task: "Draft quantum of loss",
     goal: "Quantify the loss",
     assumptions: "None",
     skillIds: ["quantum-of-loss", "paragraphs"],
+    sources: "Governing Contract, Legal Commentary, Industry Guidance",
   },
   X: {
     task: "Draft interest",
     goal: "Set out the interest logic",
     assumptions: "None",
     skillIds: ["interest", "paragraphs"],
+    sources: "Governing Contract, Commentary, Treatise",
   },
   XII: {
     task: "Draft evidence relied upon",
     goal: "Marshal the evidence",
     assumptions: "None",
     skillIds: ["evidence-relied-upon", "paragraphs"],
+    sources: "Witness Statement, Expert Reports, Document Index, Fact Table",
   },
   XIII: {
     task: "Draft relief sought",
     goal: "State the relief",
     assumptions: "None",
     skillIds: ["relief-sought", "paragraphs"],
+    sources: "Legal Theory Brief, Fact Table",
   },
 };
 
@@ -165,6 +180,8 @@ export interface DetectedContext {
   task: string;
   goal: string;
   assumptions: string;
+  /** Authoritative source inputs (per-section Sources table), as a few words. */
+  sources: string;
   /** Pre-selected skills (drafting + formatting), in display order. */
   skillIds: string[];
   /** First drafting skill -- what the run actually executes. */
@@ -221,6 +238,11 @@ export function deriveDetectedContext(
     task: spec?.task ?? `Draft ${section.title.toLowerCase()}`,
     goal: spec?.goal ?? "",
     assumptions: spec?.assumptions ?? "None",
+    sources:
+      spec?.sources ??
+      (primary && primary.requiredDocuments.length > 0
+        ? primary.requiredDocuments.map(humanizeRole).join(", ")
+        : "None"),
     skillIds,
     primarySkillId: primary ? primary.skillId : null,
     requiredDocumentRoles: primary ? primary.requiredDocuments : [],

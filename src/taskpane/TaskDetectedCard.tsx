@@ -3,7 +3,6 @@ import { DocumentRole, MatterRecord, UploadedDocumentRecord } from "@/types";
 import {
   DetectedContext,
   SKILL_LIBRARY,
-  humanizeRole,
   isDraftingSkill,
   skillDisplayName,
 } from "@/data/sections/sectionTasks";
@@ -45,7 +44,7 @@ const TaskDetectedCard: React.FC<TaskDetectedCardProps> = ({
   removeError,
   onPrimarySkillChange,
 }) => {
-  const sourcesDefault = context.requiredDocumentRoles.map(humanizeRole).join(", ") || "None";
+  const sourcesDefault = context.sources;
 
   const [task, setTask] = useState<FieldState>(field(context.task));
   const [goal, setGoal] = useState<FieldState>(field(context.goal));
@@ -65,7 +64,7 @@ const TaskDetectedCard: React.FC<TaskDetectedCardProps> = ({
     seededSection.current = context.sectionId;
     setTask(field(context.task));
     setGoal(field(context.goal));
-    setSources(field(context.requiredDocumentRoles.map(humanizeRole).join(", ") || "None"));
+    setSources(field(context.sources));
     setAssumptions(field(context.assumptions));
     setSkillIds(context.skillIds);
     setSkillQuery("");
@@ -204,19 +203,6 @@ const TaskDetectedCard: React.FC<TaskDetectedCardProps> = ({
         />
         <Confirm on={sources.confirmed} onToggle={() => setSources((f) => ({ ...f, confirmed: !f.confirmed }))} label="Sources" />
       </div>
-
-      {/* Previously-drafted sections this section needs -- read directly from the
-          document, no upload required. */}
-      {context.documentSectionSources.length > 0 && (
-        <div style={s.docChipWrap}>
-          {context.documentSectionSources.map((src) => (
-            <span key={src.sectionId} style={s.docSourceChip} title={`${src.displayName} — pulled from the document`}>
-              Section {src.sectionId} · {src.displayName}
-              <span style={s.fromDoc}>from document</span>
-            </span>
-          ))}
-        </div>
-      )}
 
       {/* Uploaded files + upload control. */}
       <div style={s.uploadArea}>
