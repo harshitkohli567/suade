@@ -151,6 +151,7 @@ export default function App() {
                   setDocumentType={setDocumentType}
                   instructions={instructions}
                   setInstructions={setInstructions}
+                  documentCount={classification?.total}
                   onBack={() => setStep(2)}
                   onGenerate={onGenerate}
                 />

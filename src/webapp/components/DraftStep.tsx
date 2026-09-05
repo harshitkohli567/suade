@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { getDocTypes, DocTypeInfo } from "../api";
+import SkillGraph from "./SkillGraph";
 
 interface Props {
   documentType: string;
   setDocumentType: (id: string) => void;
   instructions: string;
   setInstructions: (s: string) => void;
+  documentCount?: number;
   onBack: () => void;
   onGenerate: () => void;
 }
@@ -20,6 +22,7 @@ export default function DraftStep({
   setDocumentType,
   instructions,
   setInstructions,
+  documentCount,
   onBack,
   onGenerate,
 }: Props) {
@@ -61,6 +64,7 @@ export default function DraftStep({
               {selected.skills.length} Skills will run in sequence · estimated {formatEstimate(selected.estimateSeconds)}
             </span>
           </div>
+          <SkillGraph docType={selected} documentCount={documentCount} />
           <div className="pipeline">
             {selected.skills.map((s, i) => (
               <div key={s.id} className="pipe-step">
