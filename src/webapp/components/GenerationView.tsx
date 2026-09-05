@@ -33,7 +33,6 @@ function downloadBase64Docx(base64: string, filename: string) {
 
 export default function GenerationView({ runId, docTypeLabel, onStartOver }: Props) {
   const [status, setStatus] = useState<GenStatus | null>(null);
-  const [channel, setChannel] = useState<"draft" | "notes">("draft");
   const [elapsed, setElapsed] = useState(0);
   const startRef = useRef(Date.now());
 
@@ -109,63 +108,41 @@ export default function GenerationView({ runId, docTypeLabel, onStartOver }: Pro
 
       {done && result && (
         <div style={{ marginTop: 24 }}>
-          <div className="channel-tabs">
-            <button
-              className={`channel-tab ${channel === "draft" ? "active" : ""}`}
-              onClick={() => setChannel("draft")}
-            >
-              Draft {result.docTypeLabel}
-            </button>
-            <button
-              className={`channel-tab ${channel === "notes" ? "active" : ""}`}
-              onClick={() => setChannel("notes")}
-            >
-              Working Notes
-            </button>
-          </div>
-
-          {channel === "draft" ? (
-            <>
-              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
-                {result.draftDocxBase64 && result.draftFilename && (
-                  <button
-                    className="btn primary"
-                    onClick={() => downloadBase64Docx(result.draftDocxBase64!, result.draftFilename!)}
-                  >
-                    Download .docx
-                  </button>
-                )}
-              </div>
-              <div className="draft-body">
-                {result.draftSections.length > 0
-                  ? result.draftSections.map((sec, i) => (
-                      <div key={i}>
-                        <h2>{sec.label}</h2>
-                        {sec.text}
-                      </div>
-                    ))
-                  : "(No draft text was produced.)"}
-              </div>
-            </>
-          ) : (
-            <>
-              {result.workingNotesDocxBase64 && result.workingNotesFilename && (
-                <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
-                  <button
-                    className="btn primary"
-                    onClick={() =>
-                      downloadBase64Docx(result.workingNotesDocxBase64!, result.workingNotesFilename!)
-                    }
-                  >
-                    Download .docx
-                  </button>
+          <div className="downloads">
+            <div className="dl-card">
+              <div className="dl-meta">
+                <div className="dl-title">Draft — {result.docTypeLabel}</div>
+                <div className="dl-sub">
+                  {result.draftFilename || "Not produced"}
                 </div>
-              )}
-              <div className="notes-body">
-                {result.workingNotesInline || "(No working notes were produced.)"}
               </div>
-            </>
-          )}
+              <button
+                className="btn primary"
+                disabled={!result.draftDocxBase64 || !result.draftFilename}
+                onClick={() => downloadBase64Docx(result.draftDocxBase64!, result.draftFilename!)}
+              >
+                Download .docx
+              </button>
+            </div>
+
+            <div className="dl-card">
+              <div className="dl-meta">
+                <div className="dl-title">Working Notes</div>
+                <div className="dl-sub">
+                  {result.workingNotesFilename || "Not produced"}
+                </div>
+              </div>
+              <button
+                className="btn secondary"
+                disabled={!result.workingNotesDocxBase64 || !result.workingNotesFilename}
+                onClick={() =>
+                  downloadBase64Docx(result.workingNotesDocxBase64!, result.workingNotesFilename!)
+                }
+              >
+                Download .docx
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

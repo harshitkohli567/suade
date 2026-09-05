@@ -437,49 +437,40 @@ textarea {
   margin-bottom: 16px;
 }
 
-/* ---- Output channels ------------------------------------------------- */
-.channel-tabs {
+/* ---- Output downloads ------------------------------------------------- */
+.downloads {
   display: flex;
-  gap: 6px;
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 16px;
+  flex-direction: column;
+  gap: 12px;
 }
-.channel-tab {
-  border: none;
-  background: none;
-  padding: 10px 4px;
-  margin-right: 18px;
-  font-size: 14px;
+.dl-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.dl-meta {
+  min-width: 0;
+}
+.dl-title {
+  font-size: 15px;
   font-weight: 600;
-  color: var(--muted);
-  border-bottom: 2px solid transparent;
-}
-.channel-tab.active {
   color: var(--ink);
-  border-bottom-color: var(--navy);
 }
-.draft-body {
-  font-family: var(--serif);
-  font-size: 15.5px;
-  line-height: 1.7;
-  color: var(--ink);
-  white-space: pre-wrap;
-}
-.draft-body h2 {
-  font-family: var(--font);
-  font-size: 13px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
+.dl-sub {
+  font-size: 12.5px;
   color: var(--muted);
-  margin: 24px 0 8px;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 6px;
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.notes-body {
-  font-size: 13.5px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  color: var(--ink-soft);
+.dl-card .btn {
+  flex: none;
 }
 
 /* ---- Login ------------------------------------------------------------ */
