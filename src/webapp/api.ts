@@ -53,9 +53,16 @@ export interface CaseTheory {
   clientGoals: string;
 }
 
+export interface ReferenceInfo {
+  name: string;
+  label: string;
+  kind: "protocol" | "knowledge" | "structure" | "reference";
+}
+
 export interface SkillRef {
   id: string;
   label: string;
+  references?: ReferenceInfo[];
 }
 
 export interface DocTypeInfo {
@@ -64,6 +71,7 @@ export interface DocTypeInfo {
   approximate: boolean;
   skills: SkillRef[];
   estimateSeconds: number;
+  referenceCount?: number;
 }
 
 export interface GenStep {

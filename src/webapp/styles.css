@@ -539,6 +539,197 @@ textarea {
   }
 }
 
+/* ---- Provenance graph (draft step) ----------------------------------- */
+.provenance {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fbfcfe 0%, var(--panel) 60%);
+  padding: 18px 20px 16px;
+  margin: 4px 0 18px;
+}
+.prov-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-bottom: 16px;
+}
+.prov-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--navy);
+}
+.prov-stats {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.prov-stats b {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+/* Assembly rail: skill nodes on one continuous line -> output */
+.prov-rail {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 2px 6px;
+  overflow-x: auto;
+}
+.prov-rail::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 11px;
+  height: 2px;
+  background: var(--line-strong);
+  z-index: 0;
+}
+.rail-node {
+  position: relative;
+  z-index: 1;
+  flex: none;
+}
+.rail-dot {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--panel);
+  border: 2px solid var(--line-strong);
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
+}
+.rail-node:hover .rail-dot {
+  border-color: var(--accent);
+  transform: scale(1.25);
+}
+.rail-node.first .rail-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.rail-tip {
+  position: absolute;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  white-space: nowrap;
+  background: var(--navy-700);
+  color: #fff;
+  font-size: 11.5px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s, transform 0.15s;
+  z-index: 5;
+}
+.rail-node:hover .rail-tip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+.rail-arrow {
+  color: var(--muted);
+  font-size: 15px;
+  flex: none;
+  z-index: 1;
+  padding: 0 2px;
+}
+.rail-out {
+  z-index: 1;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--navy);
+  color: #fff;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+/* Reference-file lane */
+.prov-join {
+  width: 2px;
+  height: 14px;
+  background: var(--line-strong);
+  margin: 2px 0 0 24px;
+}
+.prov-refs {
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: rgba(47, 109, 240, 0.03);
+}
+.refs-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  margin-bottom: 10px;
+}
+.refs-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.refchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 5px 10px;
+  font-size: 12.5px;
+  color: var(--ink);
+  cursor: default;
+}
+.refchip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--muted);
+}
+.refchip.protocol .refchip-dot,
+.refchip-dot.protocol {
+  background: var(--accent);
+}
+.refchip.knowledge .refchip-dot,
+.refchip-dot.knowledge {
+  background: var(--warn);
+}
+.refchip.structure .refchip-dot,
+.refchip-dot.structure {
+  background: var(--good);
+}
+.refs-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 11px;
+}
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.prov-caption {
+  margin: 14px 0 0;
+  font-family: var(--serif);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+}
+
 @media (max-width: 640px) {
   .stepper {
     flex-wrap: wrap;

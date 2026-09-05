@@ -1685,8 +1685,39 @@ function buildPrompt({ skillInstructions, matter, section, uploadedDocuments, me
 const WEBAPP_LAWYER_ID = "default-lawyer";
 app.use("/api/webapp", requireAuth);
 
+// Friendly descriptor for a skill's reference file: a readable label + a
+// coarse "kind" the UI colour-codes (protocol / knowledge / structure).
+function describeReference(name) {
+  const base = name.replace(/^references\//, "").replace(/\.md$/i, "");
+  const label = base
+    .split("-")
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
+  let kind = "reference";
+  if (/protocol$/.test(base)) kind = "protocol";
+  else if (/domain-knowledge|knowledge/.test(base)) kind = "knowledge";
+  else if (/^(headings|paragraphs)$/.test(base) || /structure|format|template|heading|paragraph/.test(base))
+    kind = "structure";
+  return { name: base, label, kind };
+}
+
+// The reference files a firm Skill actually ships with (its references/*.md).
+function listSkillReferences(skillId) {
+  const firm = resolveFirmSkillFile(skillId);
+  if (!firm) return [];
+  return loadSkillReferences(firm.dir).map((r) => describeReference(r.name));
+}
+
 app.get("/api/webapp/doc-types", (req, res) => {
-  res.json({ documentTypes: webappConfig.docTypesForClient() });
+  // Enrich the static config with each skill's real reference files so the
+  // client's provenance graph reflects what actually ships, and grows as
+  // reference files are added.
+  const documentTypes = webappConfig.docTypesForClient().map((dt) => {
+    const skills = dt.skills.map((s) => ({ ...s, references: listSkillReferences(s.id) }));
+    const referenceCount = skills.reduce((n, s) => n + s.references.length, 0);
+    return { ...dt, skills, referenceCount };
+  });
+  res.json({ documentTypes });
 });
 
 /** Pull the first JSON value (object or array) out of a model response. */
