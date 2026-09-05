@@ -26,6 +26,8 @@ const {
   nextIntakeMatterId,
 } = require("./serverMatters");
 const { pdfViewerHtml, textViewerHtml, noPreviewHtml } = require("./documentViewer");
+const { registerAuthRoutes, requireAuth } = require("./serverAuth");
+const webappConfig = require("./webappConfig");
 
 /**
  * Suade backend (Step 7, extended Step 9). Holds the Anthropic API key
@@ -114,12 +116,31 @@ app.use(express.json({ limit: "25mb" }));
 // report https -- citation URLs must be absolute and correct.
 app.set("trust proxy", true);
 
+// Google sign-in + session routes for the web workspace (suadelaw.com/app).
+// Registered in all environments so auth works against the API in dev too.
+registerAuthRoutes(app);
+
 if (IS_PRODUCTION) {
   // In production this same server also serves the built task pane
   // (npm run build's dist/ output) so the whole add-in is one deployable
   // service on one domain -- no separate static host, no CORS to reason
   // about. In dev, the webpack dev server (:3000) serves the task pane
   // instead and this only runs the API on :3001.
+
+  // The web workspace lives at /login (public) and /app (session-gated).
+  // Both are SPA entry points served by the same built webapp bundle; the
+  // client routes internally. /app additionally redirects to /login when
+  // there's no valid session, so an unauthenticated deep link never flashes
+  // the workspace.
+  app.get("/login", (req, res) => {
+    res.sendFile(path.join(__dirname, "dist", "webapp.html"));
+  });
+  app.get("/app", (req, res) => {
+    const { getSessionUser } = require("./serverAuth");
+    if (!getSessionUser(req)) return res.redirect("/login");
+    res.sendFile(path.join(__dirname, "dist", "webapp.html"));
+  });
+
   app.use(express.static(path.join(__dirname, "dist")));
 }
 
@@ -1653,6 +1674,424 @@ function buildPrompt({ skillInstructions, matter, section, uploadedDocuments, me
 
   return parts.join("\n\n---\n\n");
 }
+
+// ===========================================================================
+// Web workspace (suadelaw.com/app) API. These endpoints back the browser
+// workspace: document classification, the Matter-ID connector (stub in v1),
+// case-theory drafting, and full-document generation by chaining the section
+// Skills. All require a valid session.
+// ===========================================================================
+
+const WEBAPP_LAWYER_ID = "default-lawyer";
+app.use("/api/webapp", requireAuth);
+
+app.get("/api/webapp/doc-types", (req, res) => {
+  res.json({ documentTypes: webappConfig.docTypesForClient() });
+});
+
+/** Pull the first JSON value (object or array) out of a model response. */
+function extractJson(text) {
+  if (!text) return null;
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced ? fenced[1] : text;
+  const start = candidate.search(/[[{]/);
+  if (start === -1) return null;
+  const open = candidate[start];
+  const close = open === "[" ? "]" : "}";
+  let depth = 0;
+  for (let i = start; i < candidate.length; i++) {
+    if (candidate[i] === open) depth++;
+    else if (candidate[i] === close) {
+      depth--;
+      if (depth === 0) {
+        try {
+          return JSON.parse(candidate.slice(start, i + 1));
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+async function callClaudeJson(prompt, extraContent = [], maxTokens = 4000) {
+  const content = [{ type: "text", text: prompt }, ...extraContent];
+  const response = await anthropic.beta.messages
+    .stream({
+      model: MODEL,
+      max_tokens: maxTokens,
+      betas: [FILES_API_BETA],
+      thinking: { type: "adaptive" },
+      output_config: { effort: "low" },
+      messages: [{ role: "user", content }],
+    })
+    .finalMessage();
+  const textBlock = response.content.find((b) => b.type === "text");
+  return extractJson(textBlock ? textBlock.text : "");
+}
+
+/** Format category counts into "387 documents classified - 3 contracts, ..." */
+function summarizeClassification(counts, total) {
+  const parts = webappConfig.DOCUMENT_CATEGORIES.filter((c) => counts[c.id] > 0).map(
+    (c) => `${counts[c.id]} ${counts[c.id] === 1 ? c.label.toLowerCase().replace(/s$/, "") : c.plural}`
+  );
+  return `${total} document${total === 1 ? "" : "s"} classified${parts.length ? " - " + parts.join(", ") : ""}`;
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/webapp/classify-documents
+// Body: { documents: [{ filename, fileId?, text? }] }
+// Classifies each uploaded document into the six arbitration categories and
+// returns per-doc labels + counts + a summary line.
+// ---------------------------------------------------------------------------
+app.post("/api/webapp/classify-documents", async (req, res) => {
+  try {
+    const { documents } = req.body || {};
+    if (!Array.isArray(documents) || documents.length === 0) {
+      return res.status(400).json({ error: "documents[] is required." });
+    }
+
+    const catList = webappConfig.DOCUMENT_CATEGORIES.map((c) => `"${c.id}" (${c.label})`).join(", ");
+    const listing = documents
+      .map((d, i) => {
+        const excerpt = d.text ? ` -- excerpt: ${String(d.text).slice(0, 1200)}` : "";
+        return `${i}: ${d.filename || `document-${i}`}${excerpt}`;
+      })
+      .join("\n");
+
+    const prompt =
+      `You are a legal document classifier for an international arbitration matter. Classify ` +
+      `each document below into exactly one category. Categories: ${catList}.\n\n` +
+      `Use the filename AND, where attached, the document's contents. If genuinely unclear, pick ` +
+      `the closest category (exhibits is the catch-all for evidentiary materials).\n\n` +
+      `Documents:\n${listing}\n\n` +
+      `Respond with ONLY a JSON array, one object per document in order:\n` +
+      `[{"index": 0, "category": "<category-id>"}]`;
+
+    // Attach any provided fileIds as real document blocks for accuracy.
+    const extra = documents
+      .filter((d) => d.fileId)
+      .map((d) => ({ type: "document", source: { type: "file", file_id: d.fileId } }));
+
+    const parsed = await callClaudeJson(prompt, extra, 4000);
+    const validIds = new Set(webappConfig.DOCUMENT_CATEGORIES.map((c) => c.id));
+
+    const counts = {};
+    for (const c of webappConfig.DOCUMENT_CATEGORIES) counts[c.id] = 0;
+    const classified = documents.map((d, i) => {
+      const row = Array.isArray(parsed) ? parsed.find((p) => p.index === i) : null;
+      const category = row && validIds.has(row.category) ? row.category : "exhibits";
+      counts[category]++;
+      return { filename: d.filename || `document-${i}`, fileId: d.fileId || null, category };
+    });
+
+    res.json({
+      total: documents.length,
+      counts,
+      categories: webappConfig.DOCUMENT_CATEGORIES.map((c) => ({ id: c.id, label: c.label, count: counts[c.id] })),
+      summary: summarizeClassification(counts, documents.length),
+      classified,
+    });
+  } catch (err) {
+    console.error("Suade classify-documents error:", err);
+    res.status(500).json({ error: friendlyApiError(err) });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/webapp/matter-documents
+// Body: { matterId }
+// v1 CONNECTOR STUB: real per-user Drive/Dropbox OAuth + a Matter-ID->folder
+// mapping is a fast-follow. For now, resolve the matter from the firm
+// repository and return a realistic, DETERMINISTIC classification summary
+// (stable per matterId) so the UI flow is exercised end-to-end. Clearly
+// flagged with source: "connector-stub".
+// ---------------------------------------------------------------------------
+function seededCounts(matterId) {
+  // Deterministic pseudo-random counts from the matterId, shaped to look
+  // like a real document set (mostly exhibits, few contracts/registries).
+  let h = 0;
+  for (const ch of String(matterId)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  const rand = (min, max) => {
+    h = (h * 1103515245 + 12345) >>> 0;
+    return min + (h % (max - min + 1));
+  };
+  return {
+    contracts: rand(2, 6),
+    pleadings: rand(2, 8),
+    exhibits: rand(180, 320),
+    "witness-statements": rand(8, 30),
+    affidavits: rand(20, 70),
+    "corporate-registry": rand(1, 4),
+  };
+}
+
+app.post("/api/webapp/matter-documents", (req, res) => {
+  try {
+    const { matterId } = req.body || {};
+    if (!matterId) return res.status(400).json({ error: "matterId is required." });
+
+    const all = [...loadRepositoryMatters(), ...readExtraMatters()];
+    const matter = all.find((m) => m.matterId.toLowerCase() === String(matterId).trim().toLowerCase());
+    if (!matter) {
+      return res.status(404).json({ error: `No matter found for ID "${matterId}".` });
+    }
+
+    const counts = seededCounts(matter.matterId);
+    const total = Object.values(counts).reduce((a, b) => a + b, 0);
+    res.json({
+      matter,
+      source: "connector-stub",
+      connected: true,
+      total,
+      counts,
+      categories: webappConfig.DOCUMENT_CATEGORIES.map((c) => ({ id: c.id, label: c.label, count: counts[c.id] })),
+      summary: summarizeClassification(counts, total),
+    });
+  } catch (err) {
+    console.error("Suade matter-documents error:", err);
+    res.status(500).json({ error: err.message || "Unknown error." });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/webapp/generate-case-theory
+// Body: { transcriptText?, transcriptFileId?, matter? }
+// Reads a client-meeting transcript and drafts the three case-theory fields.
+// ---------------------------------------------------------------------------
+app.post("/api/webapp/generate-case-theory", async (req, res) => {
+  try {
+    const { transcriptText, transcriptFileId, matter } = req.body || {};
+    if (!transcriptText && !transcriptFileId) {
+      return res.status(400).json({ error: "A transcript (text or fileId) is required." });
+    }
+
+    const matterLine = matter
+      ? `Matter context: ${matter.client} (${matter.representedSide}) v. ${matter.counterparty}; ${matter.matterType}; ${matter.governingLaw}.\n\n`
+      : "";
+    const prompt =
+      `You are an arbitration lawyer's assistant. From the client-meeting transcript ${
+        transcriptFileId ? "attached below" : "below"
+      }, draft the case theory in three parts. Be concise, specific, and grounded ONLY in what the ` +
+      `transcript supports -- do not invent facts.\n\n${matterLine}` +
+      (transcriptText ? `Transcript:\n${String(transcriptText).slice(0, 40000)}\n\n` : "") +
+      `Respond with ONLY a JSON object:\n` +
+      `{"facts": "<the key facts, as a short narrative>", "law": "<the legal basis / causes of action / governing law points>", "clientGoals": "<what the client wants to achieve>"}`;
+
+    const extra = transcriptFileId ? [{ type: "document", source: { type: "file", file_id: transcriptFileId } }] : [];
+    const parsed = await callClaudeJson(prompt, extra, 6000);
+    if (!parsed) {
+      return res.status(502).json({ error: "Could not parse a case theory from the transcript. Try again." });
+    }
+    res.json({
+      facts: parsed.facts || "",
+      law: parsed.law || "",
+      clientGoals: parsed.clientGoals || "",
+    });
+  } catch (err) {
+    console.error("Suade generate-case-theory error:", err);
+    res.status(500).json({ error: friendlyApiError(err) });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Full-document generation: chain the document type's Skill sequence, one
+// grounded run per section, then stitch the clean drafts and working notes.
+// Long-running -> background job keyed by runId, polled by the client.
+// ---------------------------------------------------------------------------
+const docGenRuns = new Map(); // runId -> { status, docType, steps, result, error, createdAt }
+setInterval(() => {
+  const cutoff = Date.now() - RUN_TTL_MS;
+  for (const [id, run] of docGenRuns) {
+    if (run.createdAt < cutoff) docGenRuns.delete(id);
+  }
+}, 5 * 60 * 1000).unref?.();
+
+function buildSectionMessage({ docTypeLabel, sectionLabel, caseTheory, instructions }) {
+  const ct = caseTheory || {};
+  return (
+    `You are drafting the "${sectionLabel}" section of a ${docTypeLabel} in an international ` +
+    `arbitration. Draft ONLY this section, following the Skill instructions.\n\n` +
+    `# Case Theory\n\n` +
+    `Facts:\n${ct.facts || "(not provided)"}\n\n` +
+    `Legal basis:\n${ct.law || "(not provided)"}\n\n` +
+    `Client goals:\n${ct.clientGoals || "(not provided)"}\n` +
+    (instructions ? `\n# Additional Instructions\n\n${instructions}\n` : "")
+  );
+}
+
+async function runOneSection({ skillId, docTypeLabel, matter, caseTheory, uploadedDocuments, instructions }) {
+  const loaded = loadSkillMarkdown(WEBAPP_LAWYER_ID, skillId);
+  if (!loaded) return { skipped: true, cleanDraft: "", workingNotes: null };
+
+  const skillInstructions = renderSkillWithReferences(loaded.content, loaded.references);
+  const sectionLabel = webappConfig.SKILL_LABELS[skillId] || prettifySkillName(skillId);
+  const message = buildSectionMessage({ docTypeLabel, sectionLabel, caseTheory, instructions });
+
+  const prompt = buildPrompt({
+    skillInstructions,
+    matter,
+    section: { sectionId: skillId, title: sectionLabel, text: "" },
+    uploadedDocuments,
+    message,
+  });
+
+  const content = [{ type: "text", text: prompt }];
+  for (const doc of (uploadedDocuments || []).filter((d) => d.fileId)) {
+    content.push({ type: "document", source: { type: "file", file_id: doc.fileId } });
+  }
+
+  const response = await callClaudeWithRetry(`docgen-${skillId}`, {
+    model: MODEL,
+    max_tokens: MAX_TOKENS,
+    betas: [FILES_API_BETA],
+    thinking: { type: "adaptive" },
+    output_config: { effort: "medium" },
+    messages: [{ role: "user", content }],
+  });
+  const textBlock = response.content.find((b) => b.type === "text");
+  const { cleanDraft, workingNotes } = splitChannels(textBlock ? textBlock.text : "");
+  return { skipped: false, cleanDraft, workingNotes };
+}
+
+async function executeDocumentGeneration(runId, { docType, matter, caseTheory, uploadedDocuments, instructions }) {
+  const run = docGenRuns.get(runId);
+  const draftSections = [];
+  const notesSections = [];
+  try {
+    for (let i = 0; i < docType.skills.length; i++) {
+      const skillId = docType.skills[i];
+      const step = run.steps[i];
+      step.status = "running";
+      step.startedAt = Date.now();
+
+      let result;
+      try {
+        result = await runOneSection({
+          skillId,
+          docTypeLabel: docType.label,
+          matter,
+          caseTheory,
+          uploadedDocuments,
+          instructions,
+        });
+      } catch (sectionErr) {
+        console.error(`Suade doc-gen section ${skillId} failed:`, sectionErr);
+        step.status = "error";
+        step.seconds = ((Date.now() - step.startedAt) / 1000).toFixed(1);
+        step.error = friendlyApiError(sectionErr);
+        continue; // one bad section shouldn't sink the whole document
+      }
+
+      step.seconds = ((Date.now() - step.startedAt) / 1000).toFixed(1);
+      if (result.skipped) {
+        step.status = "skipped";
+        continue;
+      }
+      step.status = "done";
+      if (result.cleanDraft) {
+        draftSections.push({ label: step.label, text: result.cleanDraft });
+      }
+      if (result.workingNotes) {
+        notesSections.push(`# ${step.label}\n\n${result.workingNotes}`);
+      }
+    }
+
+    const draft = draftSections.map((s) => `## ${s.label}\n\n${s.text}`).join("\n\n");
+    const workingNotesMarkdown = notesSections.join("\n\n---\n\n");
+
+    let workingNotesDocxBase64 = null;
+    let workingNotesFilename = null;
+    if (workingNotesMarkdown.trim()) {
+      try {
+        const stamp = new Date().toISOString().slice(0, 16).replace("T", "-").replace(":", "");
+        workingNotesFilename = `${docType.id}-working-notes-${stamp}.docx`;
+        workingNotesDocxBase64 = await buildWorkingNotesDocx({
+          skillDisplayName: `${docType.label} -- Working Notes`,
+          matterId: matter ? matter.matterId : null,
+          notesMarkdown: workingNotesMarkdown,
+        });
+      } catch (docxErr) {
+        console.error("Suade doc-gen working-notes docx failed:", docxErr);
+        workingNotesFilename = null;
+        workingNotesDocxBase64 = null;
+      }
+    }
+
+    run.status = "done";
+    run.createdAt = Date.now();
+    run.result = {
+      docTypeLabel: docType.label,
+      draft,
+      draftSections,
+      workingNotesInline: workingNotesMarkdown || null,
+      workingNotesDocxBase64,
+      workingNotesFilename,
+    };
+  } catch (err) {
+    console.error("Suade doc-gen error:", err);
+    run.status = "error";
+    run.error = friendlyApiError(err);
+    run.createdAt = Date.now();
+  }
+}
+
+app.post("/api/webapp/generate-document", (req, res) => {
+  try {
+    const { documentType, matter, caseTheory, uploadedDocuments, instructions } = req.body || {};
+    const docType = webappConfig.getDocumentType(documentType);
+    if (!docType) {
+      return res.status(400).json({ error: "Unknown documentType." });
+    }
+
+    const runId = `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const steps = docType.skills.map((skillId) => ({
+      skillId,
+      label: webappConfig.SKILL_LABELS[skillId] || prettifySkillName(skillId),
+      status: "pending",
+    }));
+    docGenRuns.set(runId, {
+      status: "running",
+      docType: { id: docType.id, label: docType.label },
+      steps,
+      estimateSeconds: docType.skills.length * webappConfig.SECONDS_PER_SKILL,
+      createdAt: Date.now(),
+    });
+
+    res.json({
+      runId,
+      docType: { id: docType.id, label: docType.label, approximate: docType.approximate },
+      steps: steps.map((s) => ({ skillId: s.skillId, label: s.label })),
+      estimateSeconds: docType.skills.length * webappConfig.SECONDS_PER_SKILL,
+    });
+
+    // Fire-and-forget: the response already went out.
+    executeDocumentGeneration(runId, { docType, matter, caseTheory, uploadedDocuments, instructions });
+  } catch (err) {
+    console.error("Suade generate-document error:", err);
+    res.status(500).json({ error: err.message || "Unknown error." });
+  }
+});
+
+app.get("/api/webapp/generate-document/:runId", (req, res) => {
+  const run = docGenRuns.get(req.params.runId);
+  if (!run) return res.status(404).json({ error: "Unknown or expired runId." });
+  res.json({
+    status: run.status,
+    docType: run.docType,
+    estimateSeconds: run.estimateSeconds,
+    steps: run.steps.map((s) => ({
+      skillId: s.skillId,
+      label: s.label,
+      status: s.status,
+      seconds: s.seconds || null,
+      error: s.error || null,
+    })),
+    result: run.result || null,
+    error: run.error || null,
+  });
+});
 
 async function start() {
   if (IS_PRODUCTION) {
