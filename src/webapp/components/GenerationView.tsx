@@ -34,7 +34,6 @@ function downloadBase64Docx(base64: string, filename: string) {
 export default function GenerationView({ runId, docTypeLabel, onStartOver }: Props) {
   const [status, setStatus] = useState<GenStatus | null>(null);
   const [channel, setChannel] = useState<"draft" | "notes">("draft");
-  const [copied, setCopied] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const startRef = useRef(Date.now());
 
@@ -61,14 +60,6 @@ export default function GenerationView({ runId, docTypeLabel, onStartOver }: Pro
   const done = status?.status === "done";
   const failed = status?.status === "error";
   const result = status?.result || null;
-
-  function copyDraft() {
-    if (!result) return;
-    navigator.clipboard.writeText(result.draft).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    });
-  }
 
   return (
     <div className="card">
@@ -136,9 +127,14 @@ export default function GenerationView({ runId, docTypeLabel, onStartOver }: Pro
           {channel === "draft" ? (
             <>
               <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
-                <button className="btn secondary" onClick={copyDraft}>
-                  {copied ? "Copied ✓" : "Copy draft"}
-                </button>
+                {result.draftDocxBase64 && result.draftFilename && (
+                  <button
+                    className="btn primary"
+                    onClick={() => downloadBase64Docx(result.draftDocxBase64!, result.draftFilename!)}
+                  >
+                    Download .docx
+                  </button>
+                )}
               </div>
               <div className="draft-body">
                 {result.draftSections.length > 0
@@ -156,7 +152,7 @@ export default function GenerationView({ runId, docTypeLabel, onStartOver }: Pro
               {result.workingNotesDocxBase64 && result.workingNotesFilename && (
                 <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
                   <button
-                    className="btn secondary"
+                    className="btn primary"
                     onClick={() =>
                       downloadBase64Docx(result.workingNotesDocxBase64!, result.workingNotesFilename!)
                     }

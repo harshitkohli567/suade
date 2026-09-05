@@ -10,7 +10,7 @@ const { toFile } = require("@anthropic-ai/sdk");
 const devCerts = require("office-addin-dev-certs");
 const mammoth = require("mammoth");
 const MsgReader = require("@kenjiuno/msgreader").default;
-const { buildWorkingNotesDocx } = require("./workingNotesDocx");
+const { buildWorkingNotesDocx, buildDraftDocx } = require("./workingNotesDocx");
 const skillEval = require("./skillEval");
 const {
   sanitizeLawyerId,
@@ -2031,12 +2031,30 @@ async function executeDocumentGeneration(runId, { docType, matter, caseTheory, u
 
     const draft = draftSections.map((s) => `## ${s.label}\n\n${s.text}`).join("\n\n");
     const workingNotesMarkdown = notesSections.join("\n\n---\n\n");
+    const stamp = new Date().toISOString().slice(0, 16).replace("T", "-").replace(":", "");
+
+    // The clean draft as a formatted .docx (the primary deliverable).
+    let draftDocxBase64 = null;
+    let draftFilename = null;
+    if (draftSections.length > 0) {
+      try {
+        draftFilename = `${docType.id}-draft-${stamp}.docx`;
+        draftDocxBase64 = await buildDraftDocx({
+          documentTypeLabel: docType.label,
+          matterId: matter ? matter.matterId : null,
+          draftSections,
+        });
+      } catch (docxErr) {
+        console.error("Suade doc-gen draft docx failed:", docxErr);
+        draftFilename = null;
+        draftDocxBase64 = null;
+      }
+    }
 
     let workingNotesDocxBase64 = null;
     let workingNotesFilename = null;
     if (workingNotesMarkdown.trim()) {
       try {
-        const stamp = new Date().toISOString().slice(0, 16).replace("T", "-").replace(":", "");
         workingNotesFilename = `${docType.id}-working-notes-${stamp}.docx`;
         workingNotesDocxBase64 = await buildWorkingNotesDocx({
           skillDisplayName: `${docType.label} -- Working Notes`,
@@ -2056,6 +2074,8 @@ async function executeDocumentGeneration(runId, { docType, matter, caseTheory, u
       docTypeLabel: docType.label,
       draft,
       draftSections,
+      draftDocxBase64,
+      draftFilename,
       workingNotesInline: workingNotesMarkdown || null,
       workingNotesDocxBase64,
       workingNotesFilename,

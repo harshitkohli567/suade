@@ -86,6 +86,8 @@ export interface GenResult {
   docTypeLabel: string;
   draft: string;
   draftSections: { label: string; text: string }[];
+  draftDocxBase64: string | null;
+  draftFilename: string | null;
   workingNotesInline: string | null;
   workingNotesDocxBase64: string | null;
   workingNotesFilename: string | null;
