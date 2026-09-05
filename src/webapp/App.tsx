@@ -117,6 +117,7 @@ export default function App() {
           <GenerationView
             runId={generation.runId}
             docTypeLabel={generation.docTypeLabel}
+            documentCount={classification?.total}
             onStartOver={startOver}
           />
         ) : (

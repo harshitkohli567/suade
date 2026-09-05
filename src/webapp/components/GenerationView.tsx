@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { pollDocumentGeneration, GenStatus } from "../api";
+import { getDocTypes, pollDocumentGeneration, DocTypeInfo, GenStatus } from "../api";
 import { formatEstimate } from "./DraftStep";
+import SkillGraph from "./SkillGraph";
 
 interface Props {
   runId: string;
   docTypeLabel: string;
+  documentCount?: number;
   onStartOver: () => void;
 }
 
@@ -31,10 +33,17 @@ function downloadBase64Docx(base64: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-export default function GenerationView({ runId, docTypeLabel, onStartOver }: Props) {
+export default function GenerationView({ runId, docTypeLabel, documentCount, onStartOver }: Props) {
   const [status, setStatus] = useState<GenStatus | null>(null);
+  const [docTypes, setDocTypes] = useState<DocTypeInfo[]>([]);
   const [elapsed, setElapsed] = useState(0);
   const startRef = useRef(Date.now());
+
+  useEffect(() => {
+    getDocTypes()
+      .then((r) => setDocTypes(r.documentTypes))
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     let stopped = false;
@@ -59,6 +68,7 @@ export default function GenerationView({ runId, docTypeLabel, onStartOver }: Pro
   const done = status?.status === "done";
   const failed = status?.status === "error";
   const result = status?.result || null;
+  const currentDocType = docTypes.find((d) => d.id === status?.docType?.id) || null;
 
   return (
     <div className="card">
@@ -82,6 +92,10 @@ export default function GenerationView({ runId, docTypeLabel, onStartOver }: Pro
                 )}`}
           </span>
         </div>
+      )}
+
+      {currentDocType && (
+        <SkillGraph docType={currentDocType} steps={status?.steps} documentCount={documentCount} />
       )}
 
       <div className="pipeline">

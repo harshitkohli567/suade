@@ -603,6 +603,23 @@ textarea {
   background: var(--accent);
   border-color: var(--accent);
 }
+/* Live states: rail nodes reflect each skill's real-time status. */
+.rail-node.done .rail-dot {
+  background: var(--good);
+  border-color: var(--good);
+}
+.rail-node.running .rail-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.rail-node.skipped .rail-dot {
+  border-style: dashed;
+}
+.rail-node.error .rail-dot {
+  background: var(--bad);
+  border-color: var(--bad);
+}
 .rail-tip {
   position: absolute;
   bottom: 22px;
@@ -699,6 +716,13 @@ textarea {
 .refchip.structure .refchip-dot,
 .refchip-dot.structure {
   background: var(--good);
+}
+/* Live: the currently-drafting skill's reference files light up. */
+.refchip.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+  font-weight: 600;
 }
 .refs-legend {
   display: flex;
