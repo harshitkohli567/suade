@@ -13,6 +13,7 @@ module.exports = async (env, options) => {
     entry: {
       taskpane: ["./src/taskpane/index.tsx"],
       commands: ["./src/commands/commands.ts"],
+      webapp: ["./src/webapp/index.tsx"],
     },
     output: {
       clean: true,
@@ -49,6 +50,11 @@ module.exports = async (env, options) => {
         template: "./src/commands/commands.html",
         chunks: ["commands"],
       }),
+      new HtmlWebpackPlugin({
+        filename: "webapp.html",
+        template: "./src/webapp/webapp.html",
+        chunks: ["webapp"],
+      }),
       new CopyWebpackPlugin({
         patterns: [
           {
@@ -78,6 +84,24 @@ module.exports = async (env, options) => {
         options: dev ? await devCerts.getHttpsServerOptions() : {},
       },
       port: 3000,
+      // Same-origin API in dev so the session cookie set by /api/auth/google
+      // sticks on localhost:3000 (the API otherwise runs on :3001).
+      proxy: [
+        {
+          context: ["/api"],
+          target: "https://localhost:3001",
+          secure: false,
+          changeOrigin: true,
+        },
+      ],
+      // The web workspace is an SPA served from webapp.html at /login and
+      // /app; serve that bundle for those client routes in dev.
+      historyApiFallback: {
+        rewrites: [
+          { from: /^\/app(\/.*)?$/, to: "/webapp.html" },
+          { from: /^\/login(\/.*)?$/, to: "/webapp.html" },
+        ],
+      },
     },
   };
 

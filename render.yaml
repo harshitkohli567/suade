@@ -10,3 +10,9 @@ services:
         value: production
       - key: ANTHROPIC_API_KEY
         sync: false
+      # Web workspace (suadelaw.com/app) Google sign-in. Set both in the
+      # Render dashboard -> Environment (see WEBAPP_SETUP.md).
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
