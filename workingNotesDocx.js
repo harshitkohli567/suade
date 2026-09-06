@@ -24,6 +24,7 @@ const {
   VerticalAlign,
   ExternalHyperlink,
 } = require("docx");
+const JSZip = require("jszip");
 
 const NUMBERING_REF = "working-notes-numbered";
 
@@ -316,12 +317,111 @@ async function buildWorkingNotesDocx({ skillDisplayName, matterId, notesMarkdown
   return Packer.toBase64String(doc);
 }
 
+// Tag prefix MUST match the add-in's EDIT_PAIR_TAG_PREFIX (insertContent.ts):
+// the add-in's edit-rationale watcher adopts any content control whose tag
+// starts with this and captures the lawyer's edits to it. Keeping it in sync
+// is what makes a downloaded draft "light up" the yes/no rationale flow.
+const EDIT_PAIR_TAG_PREFIX = "suade-ep-";
+
+/**
+ * Wraps each drafted section's body paragraphs in a hidden Word content
+ * control (SDT) tagged `suade-ep-<id>`, by post-processing the packed .docx
+ * XML (the docx library has no content-control support). When the file is
+ * opened in Word with the Suade add-in, its watcher enumerates these controls,
+ * adopts each as a tracked draft (baseline = its current text), and fires the
+ * edit-rationale yes/no question on the lawyer's first edit to that section.
+ *
+ * The transform is deterministic because we own the document's shape: a Title,
+ * a meta line, then repeating [Heading1 label, body paragraphs]. We wrap only
+ * each section's body (the heading stays outside), so the tracked text is the
+ * section draft itself. If the XML doesn't reconstruct exactly, we bail and
+ * return the file unchanged rather than risk corrupting it.
+ */
+async function embedSectionContentControls(base64Docx) {
+  const zip = await JSZip.loadAsync(Buffer.from(base64Docx, "base64"));
+  const docXmlFile = zip.file("word/document.xml");
+  if (!docXmlFile) return base64Docx;
+  let xml = await docXmlFile.async("string");
+
+  // The hidden-appearance element lives in the w15 namespace; declare it if
+  // the packer didn't (Word falls back to a visible box otherwise, but the
+  // control still works).
+  if (!/xmlns:w15=/.test(xml)) {
+    xml = xml.replace(
+      /<w:document\b/,
+      '<w:document xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"'
+    );
+  }
+
+  const bodyOpen = xml.indexOf("<w:body>");
+  const bodyClose = xml.lastIndexOf("</w:body>");
+  if (bodyOpen === -1 || bodyClose === -1) return base64Docx;
+
+  const head = xml.slice(0, bodyOpen + "<w:body>".length);
+  const tail = xml.slice(bodyClose);
+  let inner = xml.slice(bodyOpen + "<w:body>".length, bodyClose);
+
+  // Keep the trailing section properties (page setup) at the body's end.
+  let sectPr = "";
+  const sectPrMatch = inner.match(/<w:sectPr[\s\S]*?<\/w:sectPr>\s*$/);
+  if (sectPrMatch) {
+    sectPr = sectPrMatch[0];
+    inner = inner.slice(0, inner.length - sectPr.length);
+  }
+
+  // Split into top-level block elements. The draft is paragraphs only; the
+  // reconstruction guard below aborts if anything unexpected appears.
+  const blocks = inner.match(/<w:p\b[\s\S]*?<\/w:p>|<w:p\b[^>]*\/>/g) || [];
+  if (blocks.join("") !== inner) return base64Docx; // structure surprise -> don't touch it
+
+  const isHeading1 = (p) => /<w:pStyle w:val="Heading1"\s*\/>/.test(p);
+  const sdtWrap = (tag, contentXml) => {
+    const id = 100000000 + Math.floor(Math.random() * 899999999);
+    return (
+      `<w:sdt><w:sdtPr><w:alias w:val="Suade draft"/><w:tag w:val="${tag}"/>` +
+      `<w:id w:val="${id}"/><w15:appearance w15:val="hidden"/></w:sdtPr>` +
+      `<w:sdtContent>${contentXml}</w:sdtContent></w:sdt>`
+    );
+  };
+
+  const out = [];
+  let i = 0;
+  let section = 0;
+  const stamp = Date.now().toString(36);
+  while (i < blocks.length) {
+    if (isHeading1(blocks[i])) {
+      out.push(blocks[i]); // heading stays outside the control
+      i++;
+      const body = [];
+      while (i < blocks.length && !isHeading1(blocks[i])) {
+        body.push(blocks[i]);
+        i++;
+      }
+      // editPairId must match the server's ^ep-[A-Za-z0-9-]{6,64}$ (it validates
+      // it on /api/edit-rationale/predict); the tag is prefix + that id, so real
+      // Suade tags read "suade-ep-ep-...". We mirror that shape here.
+      if (body.length) out.push(sdtWrap(`${EDIT_PAIR_TAG_PREFIX}ep-web-${stamp}-${section}`, body.join("")));
+      section++;
+    } else {
+      out.push(blocks[i]); // title / meta paragraphs
+      i++;
+    }
+  }
+  if (section === 0) return base64Docx; // no sections detected -> leave as-is
+
+  zip.file("word/document.xml", head + out.join("") + sectPr + tail);
+  return zip.generateAsync({ type: "base64" });
+}
+
 /**
  * Renders the clean draft (the filing text) into a .docx with the same house
  * formatting. The clean draft is plain text whose only markup is citation
  * links, so each non-empty line becomes its own justified paragraph (this
  * preserves the pleading's own clause numbering as literal text rather than
  * re-numbering it as a Word list). Section labels become bold headings.
+ *
+ * Each section's body is wrapped in a hidden Suade content control so the
+ * add-in's edit-rationale watcher tracks edits to the downloaded draft.
  */
 async function buildDraftDocx({ documentTypeLabel, matterId, draftSections }) {
   const generatedAt = new Date().toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" });
@@ -363,7 +463,15 @@ async function buildDraftDocx({ documentTypeLabel, matterId, draftSections }) {
     sections: [{ children }],
   });
 
-  return Packer.toBase64String(doc);
+  const base64 = await Packer.toBase64String(doc);
+  try {
+    return await embedSectionContentControls(base64);
+  } catch (err) {
+    // Never fail the download over the tracking wrapper; a plain draft still
+    // opens fine, it just won't auto-track edits.
+    console.error("Suade draft content-control embedding failed:", err);
+    return base64;
+  }
 }
 
 module.exports = { buildWorkingNotesDocx, buildDraftDocx };
