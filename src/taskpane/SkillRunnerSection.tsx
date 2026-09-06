@@ -383,6 +383,11 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
         </div>
       )}
 
+      {/* Edit-watcher status: makes it visible whether Suade is tracking drafts
+          in this document (incl. ones adopted from a downloaded workspace draft)
+          and when a prediction fires -- otherwise the watcher is a black box. */}
+      <div style={styles.watchStatus}>Suade edit-watch: {editRationale.debug}</div>
+
       {trace.length > 0 && (
         <div style={styles.tracePanel}>
           <div style={styles.traceHeader}>
@@ -658,6 +663,13 @@ const SkillRunnerSection: React.FC<SkillRunnerSectionProps> = ({
 const styles: Record<string, React.CSSProperties> = {
   fieldLabel: { fontWeight: 700, color: "#5B6470", marginTop: "12px", fontSize: "13px" },
   helperText: { fontSize: "11px", color: "#5B6470", margin: "4px 0 8px 0", lineHeight: 1.5 },
+  watchStatus: {
+    fontSize: "10px",
+    color: "#8A93A0",
+    margin: "8px 0 0 0",
+    fontStyle: "italic" as const,
+    lineHeight: 1.4,
+  },
   uploadRow: { display: "flex", gap: "8px", alignItems: "center", marginBottom: "6px" },
   uploadRoleSelect: { fontSize: "12px", padding: "4px" },
   fileInput: { fontSize: "12px" },

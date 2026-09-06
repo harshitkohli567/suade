@@ -352,6 +352,12 @@ async function embedSectionContentControls(base64Docx) {
       '<w:document xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"'
     );
   }
+  // Mark w15 ignorable so a strict parser (or pre-2013 Word) treats the doc as
+  // valid and just skips the appearance hint, rather than rejecting/repairing.
+  const mcMatch = xml.match(/mc:Ignorable="([^"]*)"/);
+  if (mcMatch && !/\bw15\b/.test(mcMatch[1])) {
+    xml = xml.replace(/mc:Ignorable="([^"]*)"/, `mc:Ignorable="$1 w15"`);
+  }
 
   const bodyOpen = xml.indexOf("<w:body>");
   const bodyClose = xml.lastIndexOf("</w:body>");
@@ -380,7 +386,7 @@ async function embedSectionContentControls(base64Docx) {
     return (
       `<w:sdt><w:sdtPr><w:alias w:val="Suade draft"/><w:tag w:val="${tag}"/>` +
       `<w:id w:val="${id}"/><w15:appearance w15:val="hidden"/></w:sdtPr>` +
-      `<w:sdtContent>${contentXml}</w:sdtContent></w:sdt>`
+      `<w:sdtEndPr/><w:sdtContent>${contentXml}</w:sdtContent></w:sdt>`
     );
   };
 
