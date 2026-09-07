@@ -7,6 +7,15 @@ import {
   MatterRecord,
   UploadedDoc,
 } from "../api";
+import {
+  AlertIcon,
+  ArrowRightIcon,
+  FileTextIcon,
+  InfoIcon,
+  SearchIcon,
+  SpinnerIcon,
+  UploadIcon,
+} from "./Icons";
 
 interface Props {
   matterSource: "id" | "upload";
@@ -20,7 +29,7 @@ interface Props {
   onNext: () => void;
 }
 
-function Chips({ result }: { result: ClassificationResult }) {
+function Summary({ result }: { result: ClassificationResult }) {
   return (
     <>
       <div className="summary-line">{result.summary}</div>
@@ -29,7 +38,7 @@ function Chips({ result }: { result: ClassificationResult }) {
           .filter((c) => c.count > 0)
           .map((c) => (
             <span key={c.id} className="chip">
-              <b>{c.count}</b> {c.label}
+              <b>{c.count.toLocaleString()}</b> {c.label}
             </span>
           ))}
       </div>
@@ -83,10 +92,8 @@ export default function MatterStep(props: Props) {
       }
       const next = [...uploadedDocuments, ...uploaded];
       setUploadedDocuments(next);
-      // Classify the full set so counts reflect everything uploaded so far.
       const result = await classifyDocuments(next.map((d) => ({ filename: d.filename, fileId: d.fileId })));
       setClassification(result);
-      // Tag each uploaded doc with its category (for later document roles).
       if (result.classified) {
         const byFile = new Map(result.classified.map((c) => [c.fileId, c.category]));
         setUploadedDocuments(next.map((d) => ({ ...d, category: byFile.get(d.fileId) || d.category })));
@@ -102,19 +109,23 @@ export default function MatterStep(props: Props) {
 
   return (
     <div className="card">
-      <h2>Matter &amp; documents</h2>
+      <h2>Matter and documents</h2>
       <p className="sub">
         Point Suade at an existing matter, or upload the case file and let it classify what&apos;s there.
       </p>
 
-      <div className="tabs">
+      <div className="tabs" role="tablist">
         <button
+          role="tab"
+          aria-selected={matterSource === "id"}
           className={`tab ${matterSource === "id" ? "active" : ""}`}
           onClick={() => setMatterSource("id")}
         >
-          Enter Matter ID
+          Enter matter ID
         </button>
         <button
+          role="tab"
+          aria-selected={matterSource === "upload"}
           className={`tab ${matterSource === "upload" ? "active" : ""}`}
           onClick={() => setMatterSource("upload")}
         >
@@ -126,9 +137,9 @@ export default function MatterStep(props: Props) {
         <>
           <label className="field">
             <span className="lbl">
-              Matter ID <span className="hint">— e.g. DIS-SV-2024-0417</span>
+              Matter ID <span className="hint">— for example DIS-SV-2024-0417</span>
             </span>
-            <div style={{ display: "flex", gap: 10 }}>
+            <div className="inline-field">
               <input
                 type="text"
                 value={matterIdInput}
@@ -136,27 +147,27 @@ export default function MatterStep(props: Props) {
                 onChange={(e) => setMatterIdInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && matterIdInput.trim() && lookupMatter()}
               />
-              <button
-                className="btn secondary"
-                onClick={lookupMatter}
-                disabled={busy || !matterIdInput.trim()}
-              >
-                {busy ? "Looking up…" : "Look up"}
+              <button className="btn secondary" onClick={lookupMatter} disabled={busy || !matterIdInput.trim()}>
+                {busy ? <SpinnerIcon size={16} /> : <SearchIcon size={16} />}
+                {busy ? "Looking up" : "Look up"}
               </button>
             </div>
           </label>
 
           {matter && classification && (
             <>
-              <div style={{ fontSize: 13.5, color: "var(--ink-soft)", marginBottom: 6 }}>
+              <div className="matter-facts">
                 <b>{matter.client}</b> ({matter.representedSide}) v. {matter.counterparty}
                 <br />
                 {matter.matterType} · {matter.institutionSeat}
               </div>
-              <Chips result={classification} />
+              <Summary result={classification} />
               <div className="note">
-                Documents pulled from the matter&apos;s linked storage via a connector preview. Live
-                Google Drive / Dropbox sync is coming next.
+                <InfoIcon size={16} />
+                <span>
+                  Documents pulled from the matter&apos;s linked storage via a connector preview. Live Google
+                  Drive and Dropbox sync is coming next.
+                </span>
               </div>
             </>
           )}
@@ -178,11 +189,18 @@ export default function MatterStep(props: Props) {
             }}
           >
             {busy ? (
-              "Uploading & classifying…"
+              <span className="dz-busy">
+                <SpinnerIcon size={18} /> Uploading and classifying…
+              </span>
             ) : (
               <>
-                <strong>Click to upload</strong> or drag &amp; drop
-                <div style={{ fontSize: 12, marginTop: 6 }}>PDF, DOCX, or Outlook .msg</div>
+                <div className="dz-icon">
+                  <UploadIcon size={26} />
+                </div>
+                <div>
+                  <strong>Click to upload</strong> or drag and drop
+                </div>
+                <div className="dz-sub">PDF, DOCX, or Outlook .msg</div>
               </>
             )}
             <input
@@ -197,12 +215,15 @@ export default function MatterStep(props: Props) {
 
           {classification && (
             <div style={{ marginTop: 16 }}>
-              <Chips result={classification} />
+              <Summary result={classification} />
               {classification.classified && (
                 <ul className="filelist">
                   {classification.classified.map((c, i) => (
                     <li key={i}>
-                      <span>{c.filename}</span>
+                      <span className="fl-icon">
+                        <FileTextIcon size={16} />
+                      </span>
+                      <span className="fl-name">{c.filename}</span>
                       <span className="cat">{c.category.replace(/-/g, " ")}</span>
                     </li>
                   ))}
@@ -213,12 +234,18 @@ export default function MatterStep(props: Props) {
         </>
       )}
 
-      {error && <div className="error-banner">{error}</div>}
+      {error && (
+        <div className="error-banner">
+          <AlertIcon size={16} />
+          <span>{error}</span>
+        </div>
+      )}
 
       <div className="btn-row">
         <span />
         <button className="btn primary" onClick={onNext} disabled={!canContinue}>
-          Continue →
+          Continue
+          <ArrowRightIcon size={16} />
         </button>
       </div>
     </div>

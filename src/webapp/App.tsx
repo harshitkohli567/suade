@@ -15,10 +15,17 @@ import MatterStep from "./components/MatterStep";
 import CaseTheoryStep from "./components/CaseTheoryStep";
 import DraftStep from "./components/DraftStep";
 import GenerationView from "./components/GenerationView";
+import { BriefcaseIcon, SpinnerIcon } from "./components/Icons";
 
 /* global window */
 
 type AuthState = "loading" | "in" | "out";
+
+function initials(user: SessionUser | null): string {
+  const src = user?.name || user?.email || "";
+  const parts = src.replace(/@.*/, "").split(/[.\s_-]+/).filter(Boolean);
+  return ((parts[0]?.[0] || "") + (parts[1]?.[0] || "")).toUpperCase() || "U";
+}
 
 export default function App() {
   const [auth, setAuth] = useState<AuthState>("loading");
@@ -88,7 +95,7 @@ export default function App() {
   if (auth === "loading") {
     return (
       <div className="center-spinner">
-        <div className="spinner" />
+        <SpinnerIcon size={32} />
       </div>
     );
   }
@@ -96,16 +103,29 @@ export default function App() {
     return <Login onSignedIn={onSignedIn} />;
   }
 
+  const matterLabel = matter ? `${matter.client} v. ${matter.counterparty.replace(/\s*\(.*\)\s*$/, "")}` : null;
+
   return (
     <>
-      <header className="app-header">
-        <div className="brand">
-          <span className="brand-mark">Suade</span>
-          <span className="brand-sub">Workspace</span>
+      <header className="appbar">
+        <div className="appbar-l">
+          <span className="brand">
+            Suade<span className="dot">.</span>
+          </span>
+          {matterLabel && (
+            <span className="matter-chip" title={`${matterLabel} · ${matter!.matterId}`}>
+              <BriefcaseIcon size={14} />
+              <span className="txt">
+                {matterLabel} · {matter!.matterId}
+              </span>
+            </span>
+          )}
         </div>
-        <div className="header-user">
-          {user?.picture && <img src={user.picture} alt="" referrerPolicy="no-referrer" />}
-          <span>{user?.name || user?.email}</span>
+        <div className="appbar-r">
+          <span className="who">{user?.name || user?.email}</span>
+          <span className="avatar" aria-hidden="true">
+            {user?.picture ? <img src={user.picture} alt="" referrerPolicy="no-referrer" /> : initials(user)}
+          </span>
           <button className="link-btn" onClick={onLogout}>
             Sign out
           </button>
