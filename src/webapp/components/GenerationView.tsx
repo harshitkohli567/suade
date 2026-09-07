@@ -1,7 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { getDocTypes, pollDocumentGeneration, DocTypeInfo, GenStatus } from "../api";
+import { getDocTypes, pollDocumentGeneration, DocTypeInfo, GenStatus, GenStep } from "../api";
 import { formatEstimate } from "./DraftStep";
 import SkillGraph from "./SkillGraph";
+import {
+  AlertIcon,
+  ArrowLeftIcon,
+  CheckIcon,
+  ClockIcon,
+  DownloadIcon,
+  FileNotesIcon,
+  FileTextIcon,
+  SpinnerIcon,
+} from "./Icons";
 
 interface Props {
   runId: string;
@@ -10,13 +20,13 @@ interface Props {
   onStartOver: () => void;
 }
 
-const STATUS_ICON: Record<string, string> = {
-  pending: "",
-  running: "…",
-  done: "✓",
-  skipped: "–",
-  error: "!",
-};
+function StepMark({ status }: { status: GenStep["status"] }) {
+  if (status === "done") return <CheckIcon size={13} />;
+  if (status === "running") return <SpinnerIcon size={14} />;
+  if (status === "error") return <AlertIcon size={14} />;
+  if (status === "skipped") return <span>–</span>;
+  return null;
+}
 
 function downloadBase64Docx(base64: string, filename: string) {
   const bytes = atob(base64);
@@ -69,6 +79,7 @@ export default function GenerationView({ runId, docTypeLabel, documentCount, onS
   const failed = status?.status === "error";
   const result = status?.result || null;
   const currentDocType = docTypes.find((d) => d.id === status?.docType?.id) || null;
+  const mmss = `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`;
 
   return (
     <div className="card">
@@ -78,18 +89,16 @@ export default function GenerationView({ runId, docTypeLabel, documentCount, onS
           ? "Your draft and working notes are ready below."
           : failed
           ? "The run hit an error."
-          : "Suade is running each Skill in sequence and grounding it in your matter."}
+          : "Suade is running each skill in sequence and grounding it in your matter."}
       </p>
 
       {status && (
-        <div className="estimate">
-          <span>🕐</span>
+        <div className="banner info" style={{ marginBottom: 16 }}>
+          <ClockIcon size={16} />
           <span>
             {done
-              ? `Completed in ${Math.floor(elapsed / 60)}m ${elapsed % 60}s`
-              : `Elapsed ${Math.floor(elapsed / 60)}m ${elapsed % 60}s · estimated ${formatEstimate(
-                  status.estimateSeconds
-                )}`}
+              ? `Completed in ${mmss}`
+              : `Elapsed ${mmss} · estimated ${formatEstimate(status.estimateSeconds)}`}
           </span>
         </div>
       )}
@@ -101,7 +110,9 @@ export default function GenerationView({ runId, docTypeLabel, documentCount, onS
       <div className="pipeline">
         {(status?.steps || []).map((s) => (
           <div key={s.skillId} className={`pipe-step ${s.status}`}>
-            <span className="pipe-dot">{STATUS_ICON[s.status]}</span>
+            <span className="pipe-dot">
+              <StepMark status={s.status} />
+            </span>
             <span className="pipe-label">{s.label}</span>
             <span className="pipe-meta">
               {s.status === "running"
@@ -109,7 +120,7 @@ export default function GenerationView({ runId, docTypeLabel, documentCount, onS
                 : s.status === "done" && s.seconds
                 ? `${s.seconds}s`
                 : s.status === "skipped"
-                ? "no Skill yet"
+                ? "no skill yet"
                 : s.status === "error"
                 ? s.error || "error"
                 : ""}
@@ -118,51 +129,59 @@ export default function GenerationView({ runId, docTypeLabel, documentCount, onS
         ))}
       </div>
 
-      {failed && <div className="error-banner">{status?.error}</div>}
+      {failed && (
+        <div className="error-banner">
+          <AlertIcon size={16} />
+          <span>{status?.error}</span>
+        </div>
+      )}
 
       {done && result && (
-        <div style={{ marginTop: 24 }}>
-          <div className="downloads">
-            <div className="dl-card">
-              <div className="dl-meta">
-                <div className="dl-title">Draft — {result.docTypeLabel}</div>
-                <div className="dl-sub">
-                  {result.draftFilename || "Not produced"}
-                </div>
-              </div>
-              <button
-                className="btn primary"
-                disabled={!result.draftDocxBase64 || !result.draftFilename}
-                onClick={() => downloadBase64Docx(result.draftDocxBase64!, result.draftFilename!)}
-              >
-                Download .docx
-              </button>
+        <div className="downloads">
+          <div className="dl-card">
+            <span className="dl-icon">
+              <FileTextIcon size={20} />
+            </span>
+            <div className="dl-meta">
+              <div className="dl-title">Draft — {result.docTypeLabel}</div>
+              <div className="dl-sub">{result.draftFilename || "Not produced"}</div>
             </div>
+            <button
+              className="btn primary"
+              disabled={!result.draftDocxBase64 || !result.draftFilename}
+              onClick={() => downloadBase64Docx(result.draftDocxBase64!, result.draftFilename!)}
+            >
+              <DownloadIcon size={16} />
+              Download
+            </button>
+          </div>
 
-            <div className="dl-card">
-              <div className="dl-meta">
-                <div className="dl-title">Working Notes</div>
-                <div className="dl-sub">
-                  {result.workingNotesFilename || "Not produced"}
-                </div>
-              </div>
-              <button
-                className="btn secondary"
-                disabled={!result.workingNotesDocxBase64 || !result.workingNotesFilename}
-                onClick={() =>
-                  downloadBase64Docx(result.workingNotesDocxBase64!, result.workingNotesFilename!)
-                }
-              >
-                Download .docx
-              </button>
+          <div className="dl-card">
+            <span className="dl-icon">
+              <FileNotesIcon size={20} />
+            </span>
+            <div className="dl-meta">
+              <div className="dl-title">Working notes</div>
+              <div className="dl-sub">{result.workingNotesFilename || "Not produced"}</div>
             </div>
+            <button
+              className="btn secondary"
+              disabled={!result.workingNotesDocxBase64 || !result.workingNotesFilename}
+              onClick={() =>
+                downloadBase64Docx(result.workingNotesDocxBase64!, result.workingNotesFilename!)
+              }
+            >
+              <DownloadIcon size={16} />
+              Download
+            </button>
           </div>
         </div>
       )}
 
       <div className="btn-row">
         <button className="btn secondary" onClick={onStartOver}>
-          ← Start a new draft
+          <ArrowLeftIcon size={16} />
+          Start a new draft
         </button>
         <span />
       </div>

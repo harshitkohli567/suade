@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getDocTypes, DocTypeInfo } from "../api";
 import SkillGraph from "./SkillGraph";
+import { AlertIcon, ArrowLeftIcon, ChevronDownIcon, InfoIcon, SparkleIcon, WarningIcon } from "./Icons";
 
 interface Props {
   documentType: string;
@@ -40,31 +41,39 @@ export default function DraftStep({
   return (
     <div className="card">
       <h2>Generate a draft</h2>
-      <p className="sub">Choose the document to draft. Suade runs the matching Skills in sequence.</p>
+      <p className="sub">
+        Choose the document to draft. Suade runs the matching skills in sequence, grounded in your matter.
+      </p>
 
       <label className="field">
         <span className="lbl">Document type</span>
-        <select value={documentType} onChange={(e) => setDocumentType(e.target.value)}>
-          <option value="" disabled>
-            Select a document…
-          </option>
-          {docTypes.map((d) => (
-            <option key={d.id} value={d.id}>
-              {d.label}
+        <span className="select-wrap">
+          <select value={documentType} onChange={(e) => setDocumentType(e.target.value)}>
+            <option value="" disabled>
+              Select a document…
             </option>
-          ))}
-        </select>
+            {docTypes.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+          <ChevronDownIcon size={16} className="chev" />
+        </span>
       </label>
 
       {selected && (
         <>
-          <div className="estimate">
-            <span>🕐</span>
+          <div className="banner info" style={{ marginBottom: 14 }}>
+            <InfoIcon size={16} />
             <span>
-              {selected.skills.length} Skills will run in sequence · estimated {formatEstimate(selected.estimateSeconds)}
+              {selected.skills.length} skills will run in sequence · estimated{" "}
+              {formatEstimate(selected.estimateSeconds)}
             </span>
           </div>
+
           <SkillGraph docType={selected} documentCount={documentCount} />
+
           <div className="pipeline">
             {selected.skills.map((s, i) => (
               <div key={s.id} className="pipe-step">
@@ -73,10 +82,14 @@ export default function DraftStep({
               </div>
             ))}
           </div>
+
           {selected.approximate && (
             <div className="note">
-              This document type currently reuses a subset of the Statement-of-Claim Skills as an
-              approximation. Bespoke Skills for it are on the roadmap.
+              <WarningIcon size={16} />
+              <span>
+                This document type currently reuses a subset of the Statement-of-Claim skills as an
+                approximation. Bespoke skills for it are on the roadmap.
+              </span>
             </div>
           )}
         </>
@@ -93,14 +106,21 @@ export default function DraftStep({
         />
       </label>
 
-      {error && <div className="error-banner">{error}</div>}
+      {error && (
+        <div className="error-banner">
+          <AlertIcon size={16} />
+          <span>{error}</span>
+        </div>
+      )}
 
       <div className="btn-row">
         <button className="btn secondary" onClick={onBack}>
-          ← Back
+          <ArrowLeftIcon size={16} />
+          Back
         </button>
-        <button className="btn primary" onClick={onGenerate} disabled={!selected}>
-          Get Draft
+        <button className="btn primary lg" onClick={onGenerate} disabled={!selected}>
+          <SparkleIcon size={18} />
+          Get draft
         </button>
       </div>
     </div>

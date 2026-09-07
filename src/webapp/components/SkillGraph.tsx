@@ -1,8 +1,9 @@
 import { DocTypeInfo, GenStep, ReferenceInfo } from "../api";
+import { ArrowRightIcon } from "./Icons";
 
 /**
  * Minimalist "provenance graph": at a glance it shows a draft isn't one
- * generic prompt — it's assembled by a sequence of dedicated section Skills,
+ * generic prompt — it's assembled by a sequence of dedicated section skills,
  * each grounded in Suade's reference protocols and domain knowledge, over the
  * lawyer's own documents.
  *
@@ -103,8 +104,8 @@ export default function SkillGraph({ docType, documentCount, steps }: Props) {
             </div>
           );
         })}
-        <span className="rail-arrow" aria-hidden="true">
-          →
+        <span className="rail-arrow">
+          <ArrowRightIcon size={16} />
         </span>
         <div className="rail-out" title="Two-channel output">
           <span>Draft</span>
@@ -144,8 +145,8 @@ export default function SkillGraph({ docType, documentCount, steps }: Props) {
       )}
 
       <p className="prov-caption">
-        Every section is drafted by its own dedicated skill — grounded in Suade&apos;s arbitration
-        protocols and domain knowledge, with each claim traceable to your documents.
+        Every section is drafted by its own dedicated skill — grounded in Suade&apos;s arbitration protocols
+        and domain knowledge, with each claim traceable to your documents.
       </p>
     </section>
   );

@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { generateCaseTheory, uploadDocument, CaseTheory, MatterRecord } from "../api";
+import { AlertIcon, ArrowLeftIcon, ArrowRightIcon, SparkleIcon, SpinnerIcon, UploadIcon } from "./Icons";
 
 interface Props {
   caseTheory: CaseTheory;
@@ -41,21 +42,33 @@ export default function CaseTheoryStep({ caseTheory, setCaseTheory, matter, onBa
     <div className="card">
       <h2>Case theory</h2>
       <p className="sub">
-        Set out the theory of the case in three parts. Or upload a client-meeting transcript and Suade
-        will draft them for you to refine.
+        Set out the theory of the case in three parts. Or upload a client-meeting transcript and Suade will
+        draft them for you to refine.
       </p>
 
       <div className="dropzone" onClick={() => fileInput.current?.click()} style={{ marginBottom: 20 }}>
         {busy ? (
-          "Reading transcript & drafting case theory…"
+          <span className="dz-busy">
+            <SpinnerIcon size={18} /> Reading transcript and drafting case theory…
+          </span>
         ) : generatedFrom ? (
           <>
-            Drafted from <strong>{generatedFrom}</strong> — edit below, or upload another transcript.
+            <div className="dz-icon">
+              <SparkleIcon size={24} />
+            </div>
+            <div>
+              Drafted from <strong>{generatedFrom}</strong> — edit below, or upload another transcript.
+            </div>
           </>
         ) : (
           <>
-            <strong>Upload a client-meeting transcript</strong> to auto-draft the case theory
-            <div style={{ fontSize: 12, marginTop: 6 }}>Optional · PDF, DOCX, .txt, or .msg</div>
+            <div className="dz-icon">
+              <UploadIcon size={24} />
+            </div>
+            <div>
+              <strong>Upload a client-meeting transcript</strong> to auto-draft the case theory
+            </div>
+            <div className="dz-sub">Optional · PDF, DOCX, .txt, or .msg</div>
           </>
         )}
         <input
@@ -92,14 +105,21 @@ export default function CaseTheoryStep({ caseTheory, setCaseTheory, matter, onBa
         />
       </label>
 
-      {error && <div className="error-banner">{error}</div>}
+      {error && (
+        <div className="error-banner">
+          <AlertIcon size={16} />
+          <span>{error}</span>
+        </div>
+      )}
 
       <div className="btn-row">
         <button className="btn secondary" onClick={onBack}>
-          ← Back
+          <ArrowLeftIcon size={16} />
+          Back
         </button>
         <button className="btn primary" onClick={onNext} disabled={!hasContent}>
-          Continue →
+          Continue
+          <ArrowRightIcon size={16} />
         </button>
       </div>
     </div>
